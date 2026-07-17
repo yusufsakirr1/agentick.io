@@ -88,6 +88,39 @@ Tek kaynaklı Türkçe sorulara doğru, kaynaklı cevap geliyor.
 
 ---
 
+## 2026-07-20 — Pazartesi
+**Faz: Faz 2 — SQL Retriever (yfinance + SQLite + text-to-SQL)**
+
+### Yapılanlar
+- `src/ingestion/bist_finance_client.py` yazıldı: yfinance → SQLite pipeline
+  - `THYAO.IS` gelir tablosu, bilanço, nakit akış ve oranlar çekildi
+  - 4 tablo oluşturuldu: `income_statement`, `balance_sheet`, `cash_flow`, `ratios`
+  - Her dönem için net marj hesaplanıp `ratios` tablosuna yazıldı
+  - yfinance DataFrame erişim hatası bulundu ve düzeltildi (`.get()` yerine `.loc[]` kullanıldı)
+- `src/retrievers/sql_retriever.py` yazıldı: text-to-SQL retriever
+  - Claude Haiku ile Türkçe soru → SQL dönüşümü
+  - SQLite sorgusu çalıştırılıp sonuç `vector_retriever` ile aynı formatta döndürülüyor
+- `src/cli_test.py` güncellendi: hybrid RAG (SQL + Vector)
+  - Soru tipi keyword analizi ile belirleniyor (sayısal → SQL, yorum → Qdrant, her ikisi → ikisi birden)
+- LLM Ollama'dan Claude Sonnet'e geçirildi (API bakiyesi geldi)
+- `anthropic` paketi eklendi
+- `.gitignore`'a `data/*.db` eklendi
+
+### Test Sonucu ✅
+"THYAO'nun son 3 yılda net marjı nasıl değişti?" sorusuna sayısal, kaynaklı cevap:
+- 2023: %28,75 → 2024: %15,11 → 2025: %12,08 (düşüş trendi)
+
+### Çözülen Sorunlar
+| Sorun | Çözüm |
+|---|---|
+| yfinance DataFrame'de `.get("Total Revenue", {}).get(col)` NULL dönüyordu | pandas'ta satır erişimi `.loc["Total Revenue", col]` ile yapılır |
+| ratios tablosunda sadece bugünün tarihi vardı, tarihçe yoktu | Her gelir tablosu dönemi için ayrı net marj satırı hesaplanıp eklendi |
+
+### Faz 2 Çıktı Kriteri ✅
+Türkçe sayısal sorulara SQL üzerinden doğru, kaynaklı cevap geliyor.
+
+---
+
 ## 2026-07-17 — Cuma
 **Faz: Faz 1 → Faz 2 Geçiş / Dokümantasyon & Altyapı**
 
