@@ -21,6 +21,14 @@ DB_PATH = Path("data/bist_financials.db")
 
 # Veritabanı şeması — Claude'a ne sorulabileceğini göstermek için
 DB_SCHEMA = """
+Tablo: pdf_tables
+  ticker TEXT        -- Hisse kodu (ör. THYAO)
+  source_file TEXT   -- PDF dosya adı
+  page INTEGER       -- Sayfa numarası
+  table_index INTEGER-- Tablonun sayfadaki sırası (0'dan başlar)
+  table_text TEXT    -- Tablo içeriği metin formatında (satır | sütun yapısında)
+  uploaded_at TEXT   -- Yükleme tarihi (YYYY-MM-DD HH:MM:SS)
+
 Tablo: income_statement
   ticker TEXT          -- Hisse kodu (ör. THYAO)
   period_date TEXT     -- Dönem tarihi (YYYY-MM-DD)
@@ -69,6 +77,8 @@ Kurallar:
 - Tarih formatı YYYY-MM-DD.
 - Sonucu en fazla 10 satırla sınırla (LIMIT 10).
 - Sadece SQL döndür, açıklama ekleme.
+- pdf_tables sorgularında OR koşullarını parantez içine al: WHERE ticker = 'X' AND (table_text LIKE '%a%' OR table_text LIKE '%b%').
+- pdf_tables için her zaman ticker filtresi ekle.
 
 Ticker: {ticker}
 Soru: {question}
@@ -112,14 +122,25 @@ def _run_sql(sql: str) -> list[dict]:
     return rows
 
 
-def _rows_to_text(rows: list[dict], ticker: str) -> str:
+def _rows_to_text(rows: list[dict], ticker: str, sql: str = "") -> str:
     if not rows:
         return f"{ticker} için veri bulunamadı."
     if "error" in rows[0]:
         return f"SQL hatası: {rows[0]['error']}"
+
+    # pdf_tables sonuçları için sadece tablo içeriğini göster
+    if "pdf_tables" in sql and "table_text" in rows[0]:
+        parts = []
+        for row in rows:
+            header = f"[Sayfa {row.get('page', '?')} — {row.get('source_file', '')}]"
+            parts.append(f"{header}\n{row.get('table_text', '')}")
+        return "\n\n".join(parts)
+
+    # Standart finansal tablo çıktısı
     lines = []
+    skip_cols = {"id", "ticker", "source_file", "table_index", "uploaded_at"}
     for row in rows:
-        parts = [f"{k}={v}" for k, v in row.items() if v is not None]
+        parts = [f"{k}={v}" for k, v in row.items() if v is not None and k not in skip_cols]
         lines.append("  " + " | ".join(parts))
     return "\n".join(lines)
 
@@ -136,22 +157,26 @@ def search(question: str, ticker: str = "THYAO", top_k: int = 5) -> list[dict]:
     print(f"  Üretilen SQL: {sql}")
 
     rows = _run_sql(sql)
-    text = _rows_to_text(rows, ticker)
+    text = _rows_to_text(rows, ticker, sql)
 
     if not rows or "error" in (rows[0] if rows else {}):
         return []
 
     # Hangi tablolar sorgulandı?
-    tables = []
-    for t in ["income_statement", "balance_sheet", "cash_flow", "ratios"]:
-        if t in sql:
-            tables.append(t)
+    all_tables = ["income_statement", "balance_sheet", "cash_flow", "ratios", "pdf_tables"]
+    tables = [t for t in all_tables if t in sql]
     source = ", ".join(tables) if tables else "finansal tablolar"
 
-    # Tarih aralığını bul
-    dates = [str(r.get("period_date", "")) for r in rows if r.get("period_date")]
-    date_range = f"{dates[-1]} – {dates[0]}" if len(dates) > 1 else (dates[0] if dates else "")
-    citation = f"yfinance — {ticker} {source} ({date_range})" if date_range else f"yfinance — {ticker} {source}"
+    # pdf_tables için kaynak dosyasını citation'a ekle
+    if "pdf_tables" in sql:
+        files = list({r.get("source_file", "") for r in rows if r.get("source_file")})
+        file_str = files[0] if len(files) == 1 else ", ".join(files)
+        citation = f"PDF — {ticker} {file_str}"
+    else:
+        # Tarih aralığını bul
+        dates = [str(r.get("period_date", "")) for r in rows if r.get("period_date")]
+        date_range = f"{dates[-1]} – {dates[0]}" if len(dates) > 1 else (dates[0] if dates else "")
+        citation = f"yfinance — {ticker} {source} ({date_range})" if date_range else f"yfinance — {ticker} {source}"
 
     return [{
         "text": text,

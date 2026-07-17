@@ -2,151 +2,179 @@
 
 **BIST hisseleri için Türkçe AI finansal analist.**
 
-Türk bireysel yatırımcıların KAP faaliyet raporları, finansal tablolar ve güncel haberler üzerinden Türkçe sorular sorabildiği, kaynaklı cevaplar aldığı agentic RAG platformu.
-
-> Bloomberg ve Perplexity bu nişi karşılamıyor. KAP verileri + Türkçe + agentic reasoning.
+Türk bireysel yatırımcıların KAP faaliyet raporları ve finansal tablolar üzerinden Türkçe sorular sorabildiği, kaynaklı cevaplar aldığı agentic RAG platformu.
 
 ---
 
 ## Nasıl Çalışır
 
-Kullanıcı bir hisse kodu ve Türkçe soru girer. Agent dört veri kaynağını paralel tarar, eksik bilgiyi fark edip ek arama yapar, tüm bulguları Türkçe ve kaynaklı tek cevaba dönüştürür.
+Kullanıcı PDF yükler (KAP faaliyet raporu), ticker seçer ve Türkçe soru sorar. LangGraph agent PDF'teki tabloları ve metni, yfinance finansal verilerini paralel tarar; eksikse tekrar arar; Türkçe ve kaynaklı cevap üretir.
 
 ```
-Soru
- │
- ▼
-PLANNER   → soruyu alt görevlere böler, kaynak tipini sınıflandırır
- │
- ▼
-ROUTER    → paralel retriever çağrısı (asyncio.gather)
- │
- ├── SQL Retriever      (yfinance — fiyat, bilanço, oranlar)
- ├── Vector RAG         (KAP faaliyet raporları — Qdrant)
- ├── Haber Retriever    (Bloomberg HT, Dünya, Reuters TR)
- └── KAP Özel Durum     (temettü, sermaye artırımı, YK kararları)
- │
- ▼
-CRITIC    → bilgi yeterli mi? değilse Router'a geri dön (max 3 tur)
- │
- ▼
-SYNTHESIZER → Türkçe, kaynak gösterimli nihai cevap + KAP linkleri
+Kullanıcı sorusu
+      │
+      ▼
+  PLANNER   → soruyu alt görevlere böler (sql / vector)
+      │
+      ▼
+  ROUTER    → paralel retriever çağrısı (asyncio.gather)
+      │
+      ├── SQL Retriever    (yfinance + PDF tabloları — SQLite)
+      └── Vector Retriever (KAP rapor metni — Qdrant)
+      │
+      ▼
+  CRITIC    → bilgi yeterli mi? değilse PLANNER'a geri dön (max 3 tur)
+      │
+      ▼
+  SYNTHESIZER → Türkçe, kaynaklı cevap (Claude Sonnet 4.6)
 ```
 
 ---
 
-## Stack
+## Teknoloji Stack
 
 | Katman | Teknoloji |
 |---|---|
-| Agent orkestrasyonu | LangGraph |
-| LLM | Claude Sonnet (Anthropic) |
-| Embedding | paraphrase-multilingual-mpnet-base-v2 (lokal) → voyage-3 (prod) |
-| Vector DB | Qdrant Cloud |
-| Finansal veri | yfinance (`.IS` suffix) |
-| İlişkisel DB | SQLite → Supabase PostgreSQL |
-| Backend | FastAPI |
-| Frontend | Next.js + shadcn/ui |
-| Auth | Supabase Auth |
-| Ödeme | Stripe |
-| Gözlemlenebilirlik | Langfuse |
-| Deployment | Railway |
-| Ortam | uv |
-
----
-
-## İş Modeli
-
-**Freemium SaaS** — Ayda 5 sorgu ücretsiz, sonrası aylık abonelik.
-
----
-
-## Durum
-
-| Faz | İçerik | Durum |
-|---|---|---|
-| 1 | KAP veri katmanı + naive RAG | ✅ Tamamlandı |
-| 2 | 4 retriever bağımsız çalışır | 🔄 Devam ediyor |
-| 3 | LangGraph agent orkestrasyonu | Bekliyor |
-| 4 | Self-critique / retry döngüsü | Bekliyor |
-| 5 | Synthesizer + kaynak gösterme | Bekliyor |
-| 6 | Auth + Freemium + Stripe | Bekliyor |
-| 7 | Next.js frontend | Bekliyor |
-| 8 | Eval sistemi | Bekliyor |
-| 9 | Lansman | Bekliyor |
+| LLM (Sentez) | Claude Sonnet 4.6 |
+| LLM (Planner/Critic) | Claude Haiku 4.5 |
+| Agent Orkestrasyonu | LangGraph |
+| Embedding | paraphrase-multilingual-mpnet-base-v2 (lokal) |
+| Vektör DB | Qdrant Cloud |
+| İlişkisel DB | SQLite (`data/bist_financials.db`) |
+| Finansal Veri | yfinance |
+| PDF İşleme | pdfplumber (tablolar) + PyMuPDF (metin) |
+| Backend | FastAPI + Uvicorn |
+| Frontend | React 18 + TypeScript + Vite + Tailwind CSS |
+| Gözlemlenebilirlik | LangSmith |
 
 ---
 
 ## Kurulum
 
+### Gereksinimler
+- Python 3.12+
+- Node.js 18+
+- [uv](https://github.com/astral-sh/uv) paket yöneticisi
+- Qdrant Cloud hesabı (ücretsiz tier yeterli)
+- Anthropic API anahtarı
+
+### 1. Ortam Değişkenleri
+
 ```bash
-git clone https://github.com/yusufsakirr1/agentick.io
-cd agentick.io
+cp .env.example .env
+# .env dosyasını düzenle:
+# ANTHROPIC_API_KEY, QDRANT_URL, QDRANT_API_KEY
+```
+
+### 2. Backend
+
+```bash
 uv sync
-cp .env.example .env  # API keylerini doldur
+uv run uvicorn backend.main:app --reload --port 8000
 ```
+
+### 3. Frontend
 
 ```bash
-# Vektör indeksini oluştur (önce data/raw/ altına KAP PDF'i koy)
-uv run python src/ingestion/build_vector_index.py
-
-# CLI testi
-uv run python src/cli_test.py
+cd frontend
+npm install
+npm run dev   # http://localhost:5173
 ```
 
 ---
 
-## Ortam Değişkenleri
+## Kullanım
 
-`.env.example` dosyasını kopyalayıp doldurun:
+1. **PDF Yükle** — Siteye gir, ticker seç (ör. THYAO), KAP'tan indirdiğin PDF'i yükle.
+2. **Veri Güncelle** — `↺` butonuna tıkla, yfinance'den güncel finansal veriler çekilir.
+3. **Soru Sor** — "2024 net marjı nedir?", "Yönetimin büyüme stratejisi nedir?" gibi sorular sor.
+4. **Kaynaklı Cevap** — Her iddia kaynak göstererek yanıtlanır.
 
+---
+
+## API Endpoint'leri
+
+| Method | Endpoint | Açıklama |
+|---|---|---|
+| POST | `/api/upload/sync` | PDF yükle ve indexle (senkron) |
+| POST | `/api/fetch-data` | yfinance verisini SQLite'a çek |
+| POST | `/api/ask` | Soru sor, agent yanıtını al |
+| GET | `/api/health` | Sağlık kontrolü |
+
+### `/api/ask` Örnek İstek
+
+```json
+{
+  "question": "THYAO'nun 2024 net kâr marjı nedir?",
+  "ticker": "THYAO",
+  "conversation_history": []
+}
 ```
-ANTHROPIC_API_KEY=
-VOYAGE_API_KEY=
-QDRANT_URL=
-QDRANT_API_KEY=
-SUPABASE_URL=
-SUPABASE_ANON_KEY=
-SUPABASE_SERVICE_ROLE_KEY=
-STRIPE_SECRET_KEY=
-STRIPE_WEBHOOK_SECRET=
-LANGFUSE_PUBLIC_KEY=
-LANGFUSE_SECRET_KEY=
-MAX_RETRY_COUNT=3
-KAP_REQUEST_DELAY_SECONDS=2
+
+### `/api/ask` Örnek Yanıt
+
+```json
+{
+  "answer": "THYAO'nun 2024 net kâr marjı %15,1'dir... (Kaynak: yfinance — THYAO ratios)\n\nBu bilgi yatırım tavsiyesi değildir.",
+  "ticker": "THYAO",
+  "sub_tasks": [{"query": "THYAO 2024 net marj", "type": "sql"}],
+  "retrieved_count": 4,
+  "retry_count": 1,
+  "critic_feedback": "SUFFICIENT"
+}
 ```
 
 ---
 
-## Klasör Yapısı
+## Desteklenen Hisseler (BIST-30)
+
+`AKBNK AKSEN ARCLK ASELS BIMAS EKGYO ENKAI EREGL FROTO GARAN`
+`GUBRF HALKB ISCTR KCHOL KONTR KOZAL KRDMD ODAS PETKM PGSUS`
+`SAHOL SASA SISE TAVHL TCELL THYAO TOASO TUPRS VAKBN YKBNK`
+
+---
+
+## Proje Yapısı
 
 ```
 agentick.io/
+├── backend/                  # FastAPI
+│   ├── main.py
+│   ├── routes/
+│   │   ├── upload.py         # POST /api/upload
+│   │   ├── query.py          # POST /api/ask
+│   │   └── fetch_data.py     # POST /api/fetch-data
+│   └── services/
+│       └── pdf_pipeline.py   # PDF → SQLite + Qdrant
+├── src/
+│   ├── agent/                # LangGraph agent
+│   │   ├── state.py
+│   │   ├── planner_node.py
+│   │   ├── router_node.py
+│   │   ├── critic_node.py
+│   │   ├── synthesizer_node.py
+│   │   └── graph.py
+│   ├── retrievers/
+│   │   ├── sql_retriever.py  # Text-to-SQL (SQLite)
+│   │   └── vector_retriever.py # Qdrant semantic search
+│   └── ingestion/
+│       ├── bist_finance_client.py  # yfinance → SQLite
+│       ├── pdf_chunker.py          # PDF → text chunks
+│       └── build_vector_index.py   # chunks → Qdrant
+├── frontend/                 # React + Vite
+│   └── src/
+│       ├── App.tsx
+│       ├── components/
+│       │   ├── AgentLogo.tsx
+│       │   ├── ChatInput.tsx
+│       │   ├── Message.tsx
+│       │   ├── Sidebar.tsx
+│       │   └── ThinkingIndicator.tsx
+│       ├── api/client.ts
+│       └── services/conversationStorage.ts
 ├── data/
-│   └── raw/                    ← KAP'tan indirilen PDF'ler
-└── src/
-    ├── ingestion/
-    │   ├── kap_client.py       ← KAP PDF indirme
-    │   ├── pdf_chunker.py      ← Türkçe PDF → chunk
-    │   └── build_vector_index.py
-    ├── retrievers/
-    │   ├── vector_retriever.py ← Qdrant semantic search
-    │   ├── sql_retriever.py    ← text-to-SQL (yfinance)
-    │   ├── news_retriever.py   ← TR haber kaynakları
-    │   └── kap_event_retriever.py
-    ├── agent/
-    │   ├── state.py
-    │   ├── planner_node.py
-    │   ├── router_node.py
-    │   ├── critic_node.py
-    │   ├── synthesizer_node.py
-    │   └── graph.py
-    └── api/
-        ├── main.py
-        ├── auth.py
-        └── quota.py
+│   ├── raw/                  # Yüklenen PDF'ler
+│   └── bist_financials.db    # SQLite
+├── pyproject.toml
+└── .env.example
 ```
-
----
-
-> Bu araç yatırım tavsiyesi vermez. Tüm cevaplar kamuya açık KAP verilerine dayanır; yatırım kararları kullanıcının sorumluluğundadır.

@@ -1,446 +1,444 @@
-# agentick.io — BIST için Agentic AI Finansal Analist
+# agentick.io — Sistem Mimarisi
 
-> **Ürün:** Türk bireysel yatırımcıların BIST hisseleri hakkında soru sorabildiği,
-> KAP dosyaları, finansal tablolar ve güncel haberlerden kaynaklı cevap alan
-> Türkçe AI finansal analiz platformu.
->
-> **Hedef kitle:** Temel analiz yapmaya çalışan ama araç ve zaman kısıtı olan
-> Türk bireysel yatırımcısı.
->
-> **İş modeli:** Freemium SaaS — ayda 5 sorgu ücretsiz, sonrası aylık ₺199 / $9.
->
-> **Rekabet avantajı:** KAP verileri + Türkçe içerik + agentic reasoning.
-> Bloomberg/Perplexity bu nişi karşılamıyor.
+> BIST hisseleri için Türkçe agentic RAG platformu.
+> KAP faaliyet raporları + yfinance finansal verileri + LangGraph orchestration.
 
 ---
 
-## 1. Genel Mimari
+## 1. Genel Akış
 
 ```
-                          ┌─────────────────────┐
-                          │   Kullanıcı Sorusu   │
-                          │  (Türkçe, BIST odak) │
-                          └──────────┬───────────┘
-                                     │
-                          ┌──────────▼───────────┐
-                          │   PLANNER NODE        │
-                          │ Soruyu alt görevlere  │
-                          │ böler, kaynak tipini  │
-                          │ sınıflandırır         │
-                          └──────────┬───────────┘
-                                     │
-                          ┌──────────▼───────────┐
-                          │   ROUTER NODE         │
-                          │ Her alt görev için    │
-                          │ doğru kaynağı seçer   │
-                          └──────────┬───────────┘
-           ┌─────────────────────────┼──────────────────────┬────────────────────┐
-           │                         │                        │                    │
-    ┌──────▼──────┐         ┌────────▼──────┐       ┌────────▼──────┐   ┌────────▼──────┐
-    │ SQL/Numeric  │         │  Vector RAG   │        │  Haber/Web    │   │  KAP Özel     │
-    │  Retriever   │         │ (KAP Faaliyet │        │  Retriever    │   │  Durum        │
-    │  (yfinance   │         │  Raporları)   │        │  (TR haber    │   │  Retriever    │
-    │   BIST .IS)  │         │               │        │   kaynakları) │   │  (özel durum, │
-    └──────┬──────┘         └────────┬──────┘        └────────┬──────┘   │  YK kararları)│
-           └─────────────────────────┼───────────────────────┘    └────────┬──────┘
-                                     │                                      │
-                                     └──────────────────────────────────────┘
-                                                      │
-                                          ┌──────────▼───────────┐
-                                          │  CRITIC NODE          │
-                                          │ Sonuç yeterli mi?     │
-                                          │ Yetersizse → Router'a │
-                                          │ geri dön (max 3 tur)  │
-                                          └──────────┬───────────┘
-                                                     │ yeterli
-                                          ┌──────────▼───────────┐
-                                          │  SYNTHESIZER NODE     │
-                                          │ Türkçe, kaynak        │
-                                          │ göstererek nihai      │
-                                          │ cevabı üretir         │
-                                          └──────────┬───────────┘
-                                                     │
-                                          ┌──────────▼───────────┐
-                                          │   Cevap + Trace Log   │
-                                          │   + KAP linkleri      │
-                                          └───────────────────────┘
-```
-
-Graf **LangGraph** ile kurulur. Her node Python fonksiyonu, geçişler conditional.
-Critic node retry/devam kararı verir — sonsuz döngüye karşı `MAX_RETRY_COUNT=3`.
-
----
-
-## 2. Veri Kaynakları
-
-| Retriever | Kaynak | Ne çeker |
-|---|---|---|
-| SQL/Numeric | `yfinance` (`.IS` suffix) | Fiyat, gelir tablosu, bilanço, marj, F/K, PD/DD |
-| Vector RAG | KAP.org.tr — faaliyet raporları (PDF) | Yönetim yorumu, strateji, risk faktörleri |
-| Haber/Web | Bloomberg HT, Dünya, Reuters TR, Milliyet Ekonomi | Güncel gelişmeler, sektör haberleri |
-| KAP Özel Durum | KAP.org.tr — özel durum bildirimleri, YK kararları | Temettü, sermaye artırımı, ortaklık değişimi |
-
-**KAP veri erişimi:** Resmi API yok. Veriler herkese açık, scraping legaldir.
-`kap.org.tr` URL yapısı tahmin edilebilir — şirket kodu + belge tipi ile çekilir.
-
----
-
-## 3. Teknoloji Stack
-
-| Katman | MVP (İlk Lansman) | Sonraki Aşama |
-|---|---|---|
-| Agent orkestrasyonu | **LangGraph** | LangGraph (değişmez) |
-| LLM | **Claude claude-sonnet-4-6** | claude-sonnet-4-6 (değişmez) |
-| Embedding | **voyage-3** | voyage-3 |
-| Vektör DB | **Qdrant Cloud** (free tier) | Qdrant Cloud (ölçekle) |
-| İlişkisel DB | **Supabase** (PostgreSQL) | Supabase |
-| Auth | **Supabase Auth** | Supabase Auth |
-| Backend | **FastAPI** | FastAPI |
-| Frontend | **Next.js + shadcn/ui** | Next.js |
-| Ödeme | **Stripe** | Stripe |
-| LLM gözlemlenebilirlik | **Langfuse** (self-host) | Langfuse |
-| Deployment | **Railway** | Railway / Fly.io |
-| Ortam | **uv** | uv |
-
-**Neden Streamlit değil:** Perakende yatırımcıya satılacak bir ürün için Streamlit
-yeterince profesyonel görünmüyor. Next.js ile mobil uyumlu, hızlı bir UI.
-
----
-
-## 4. Klasör Yapısı
-
-```
-agentick.io/
-├── mimari.md
-├── .env.example
-├── pyproject.toml
-├── data/
-│   ├── raw/                        ← KAP'tan indirilen PDF'ler
-│   ├── processed/                  ← chunk'lanmış, temizlenmiş metin
-│   └── bist_financials.db          ← geliştirme için lokal SQLite
-├── src/
-│   ├── ingestion/
-│   │   ├── kap_client.py           ← KAP.org.tr'dan faaliyet raporu + özel durum çekme
-│   │   ├── bist_finance_client.py  ← yfinance .IS suffix ile BIST fiyat/finansal veri
-│   │   ├── pdf_chunker.py          ← Türkçe PDF'leri chunk'lama
-│   │   └── build_vector_index.py   ← Qdrant'a embedding yazma
-│   ├── retrievers/
-│   │   ├── sql_retriever.py        ← yfinance verisi, text-to-SQL
-│   │   ├── vector_retriever.py     ← Qdrant semantic search
-│   │   ├── news_retriever.py       ← TR haber kaynakları
-│   │   └── kap_event_retriever.py  ← Özel durum bildirimleri
-│   ├── agent/
-│   │   ├── state.py                ← LangGraph AgentState
-│   │   ├── planner_node.py
-│   │   ├── router_node.py
-│   │   ├── critic_node.py
-│   │   ├── synthesizer_node.py
-│   │   └── graph.py
-│   ├── api/
-│   │   ├── main.py                 ← FastAPI endpoints
-│   │   ├── auth.py                 ← Supabase Auth middleware
-│   │   └── quota.py                ← Freemium sorgu kotası kontrolü
-│   └── ui/                         ← Next.js projesi (ayrı klasör)
-├── eval/
-│   ├── bist_test_questions.jsonl   ← BIST'e özel soru seti
-│   ├── run_eval.py
-│   └── results/
-└── tests/
-    ├── test_retrievers.py
-    └── test_agent_graph.py
+Kullanıcı (browser)
+    │  PDF yükle / soru sor / ticker seç
+    ▼
+React Frontend (Vite, port 5173)
+    │  POST /api/upload/sync
+    │  POST /api/ask
+    │  POST /api/fetch-data
+    ▼
+FastAPI Backend (Uvicorn, port 8000)
+    │
+    ├── PDF Pipeline ──────────────────────────────────────┐
+    │   pdfplumber → pdf_tables (SQLite)                   │
+    │   PyMuPDF + pdf_chunker → embedding → Qdrant         │
+    │   yfinance → income_statement / balance_sheet / ...  │
+    │                                                       ▼
+    └── LangGraph Agent                              SQLite + Qdrant
+            │
+            ▼
+        PLANNER NODE (Claude Haiku)
+            Sohbet geçmişini okur
+            Soruyu standalone hale getirir
+            Alt görevler üretir: [{query, type: "sql"|"vector"}]
+            │
+            ▼
+        ROUTER NODE (asyncio.gather)
+            ├── type="sql"    → SQL Retriever → SQLite
+            └── type="vector" → Vector Retriever → Qdrant
+            │
+            ▼
+        CRITIC NODE (Claude Haiku)
+            "Bilgi yeterli mi?"
+            ├── SUFFICIENT  → SYNTHESIZER'a geç
+            └── INSUFFICIENT → PLANNER'a geri dön (max 3 tur)
+            │
+            ▼
+        SYNTHESIZER NODE (Claude Sonnet 4.6)
+            Max 12 kaynak (skora göre sıralı)
+            Türkçe, kaynaklı cevap
+            "Bu bilgi yatırım tavsiyesi değildir."
+            │
+            ▼
+        JSON yanıt → Frontend
 ```
 
 ---
 
-## 5. Retriever Standart Çıktı Formatı
+## 2. LangGraph Agent
 
-```python
-class RetrievalResult(TypedDict):
-    source_type: str      # "sql" | "vector_kap" | "news" | "kap_event"
-    content: str
-    citation: str         # "KAP — THYAO Faaliyet Raporu 2024, s.47"
-    url: str | None       # direkt KAP linki veya haber URL'i
-    date: str | None      # verinin tarihi (tazelik için önemli)
-    confidence: float
-```
-
----
-
-## 6. AgentState
+### AgentState
 
 ```python
 class AgentState(TypedDict):
-    question: str
-    ticker: str | None          # THYAO, TUPRS, ASELS vb.
-    sub_tasks: list[str]
-    retrieved: list[RetrievalResult]
-    critic_feedback: str | None
-    retry_count: int
-    final_answer: str | None
-    trace: list[dict]           # UI'daki adım adım trace için
-    user_id: str                # Supabase user — kota kontrolü için
+    question: str                              # Kullanıcının orijinal sorusu
+    ticker: str                                # Hisse kodu (ör. THYAO)
+    conversation_history: list[dict]           # Önceki mesajlar (son 6)
+    standalone_question: str                   # Planner'ın rewrite ettiği soru
+    sub_tasks: list[dict]                      # [{"query": "...", "type": "sql"|"vector"}]
+    retrieved: Annotated[list[dict], operator.add]  # Birikimli retriever sonuçları
+    critic_feedback: str                       # "SUFFICIENT" veya "INSUFFICIENT: ..."
+    retry_count: int                           # Kaç kez retry yapıldı (max 3)
+    final_answer: str                          # Synthesizer çıktısı
 ```
 
----
-
-## 7. FAZ 1 — Veri Katmanı + Naive RAG (3-4 gün)
-
-**Hedef:** Tek şirket, tek kaynak (KAP faaliyet raporu) üzerinde çalışan basit RAG.
-Agentic kısım yok — boru hattının çalıştığını önce doğrula.
-
-### Adımlar
-1. `kap_client.py`: Türk Hava Yolları (THYAO) son faaliyet raporunu KAP'tan indir.
-   - URL yapısı: `https://www.kap.org.tr/tr/Bildirim/{bildirim_id}`
-   - Şirket sayfasından son yıllık raporu bul, PDF indir.
-2. `pdf_chunker.py`: Türkçe PDF'i temizle ve chunk'la.
-   - Chunk boyutu: ~500-800 token, %10-15 overlap.
-   - Bölüm başlıklarını ("Finansal Durum", "Risk Faktörleri") metadata olarak sakla.
-3. `voyage-3` ile embedding üret, **Qdrant Cloud** free tier'a yaz.
-4. CLI ile test: "THY'nin 2024 yolcu gelirleri nedir?" → chunk → LLM → cevap.
-
-**Çıktı kriteri:** Tek kaynaklı Türkçe sorulara doğru, kaynaklı cevap geliyor.
-
----
-
-## 8. FAZ 2 — Çoklu Retriever Katmanı (3-4 gün)
-
-**Hedef:** 4 retriever'ı bağımsız olarak çalışır hale getir. Aralarında henüz
-agentic seçim yok — her biri ayrı test edilecek.
-
-### Adımlar
-1. **SQL Retriever** — `bist_finance_client.py`
-   - `yfinance`: `yf.Ticker("THYAO.IS")` ile gelir tablosu, bilanço, oranlar.
-   - Supabase PostgreSQL'e yaz (lokal geliştirmede SQLite kabul edilebilir).
-   - LLM ile text-to-SQL: "THY'nin son 3 yılda F/K oranı nasıl değişti?" → SQL → sonuç.
-
-2. **Vector RAG** — `vector_retriever.py`
-   - Qdrant'ta semantic search.
-   - Metadata filtresi: ticker + belge tipi + yıl.
-
-3. **Haber Retriever** — `news_retriever.py`
-   - Claude'un `web_search` tool'u ile Türkçe haber arama.
-   - Arama deseni: `"{ticker} {şirket adı} site:bloomberght.com OR site:dunya.com"`
-
-4. **KAP Özel Durum Retriever** — `kap_event_retriever.py`
-   - KAP'taki özel durum bildirimleri listesini çek (temettü, sermaye, ortaklık).
-   - Tarih bazlı filtrele (son 3 ay varsayılan).
-
-**Çıktı kriteri:** Her retriever bağımsız test dosyasında doğru format dönüyor.
-
----
-
-## 9. FAZ 3 — Agent Orkestrasyonu / LangGraph (3-4 gün)
-
-**Hedef:** Faz 1-2 parçalarını gerçek graf'a bağla.
-
-### Graf Akışı
-```
-START → planner → router → critic → (yetersizse) → router
-                               │
-                          (yeterliyse)
-                               ▼
-                          synthesizer → END
-```
-
-### Planner Node
-- Girdi: Türkçe kullanıcı sorusu + ticker (varsa).
-- Görev: 1-4 alt görev üret. Her görev için kaynak tipini sınıflandır:
-  - Sayısal/oran/tarih → `sql`
-  - Yönetim yorumu/strateji → `vector_kap`
-  - Güncel/son gelişme → `news`
-  - Temettü/sermaye/ortaklık → `kap_event`
-- Çıktı: `sub_tasks` listesi + her biri için `source_type`.
-
-### Router Node
-- Her `sub_task` için ilgili retriever'ı `asyncio.gather` ile paralel çağır.
-- Sonuçları `retrieved` listesine ekle.
-
-**Çıktı kriteri:** "THYAO'nun son çeyrek kargo gelirleri ve yönetim bu konuda
-ne dedi?" sorusu otomatik olarak SQL + vector görevlere bölünüyor.
-
----
-
-## 10. FAZ 4 — Self-Critique / Retry Döngüsü (2-3 gün)
-
-**Hedef:** Agent kendi sonucunu değerlendirip eksik bilgiyi fark etsin.
-
-### Adımlar
-1. **Critic Node**: Toplanan `retrieved` + orijinal soruyu LLM'e ver:
-   - "Bu bilgi Türk yatırımcının sorusunu tam cevaplamak için yeterli mi?"
-   - Yetersizse: neyin eksik olduğunu ve hangi kaynağın deneneceğini JSON döndür.
-2. `retry_count >= 3` ise döngüyü kır — elde olanla "eksik bilgi" notu ile cevap üret.
-3. Her retry'da yeni sorgu önceki state'e eklenir, kaybolmaz.
-
-**Çıktı kriteri:** Kasıtlı eksik bırakılan bir senaryoda Critic ek arama tetikliyor.
-
----
-
-## 11. FAZ 5 — Synthesizer + Kaynak Gösterme (1-2 gün)
-
-**Hedef:** Tüm bilgiyi Türkçe, tutarlı, kaynaklı tek cevaba dönüştür.
-
-### Adımlar
-1. Synthesizer prompt'u her cümleyi ilgili `RetrievalResult`'a bağlasın:
-   - `[Kaynak: KAP — THYAO Faaliyet Raporu 2024, s.23]`
-   - `[Kaynak: yfinance — Gelir Tablosu Q3 2024]`
-2. Cevap + citation listesi + KAP URL'leri ayrı alanlar olarak dönsün.
-3. Çelişkili veri varsa (haberde bir rakam, raporda başka) açıkça belirt.
-
----
-
-## 12. FAZ 6 — Auth + Freemium Kota + Stripe (3-4 gün)
-
-**Hedef:** Ürünü gerçek kullanıcıya açmak için minimum altyapı.
-
-### Adımlar
-1. **Supabase Auth**: Email/Google ile kayıt/giriş.
-2. **Kota tablosu** (`user_quotas`): Her kullanıcı için aylık sorgu sayısı.
-   - Free tier: 5 sorgu/ay
-   - Pro tier: sınırsız
-3. **FastAPI middleware** (`quota.py`): Her sorgu öncesi kota kontrol et.
-4. **Stripe**: Aylık abonelik linki (Stripe Payment Link — en hızlı entegrasyon).
-   - Pro geçişte Supabase'de `tier = 'pro'` güncelle.
-
----
-
-## 13. FAZ 7 — Next.js Frontend (3-5 gün)
-
-**Hedef:** Perakende yatırımcıya satılabilecek, profesyonel görünümlü UI.
-
-### Sayfalar
-1. **Ana sayfa** (`/`): Değer önerisi + CTA ("Ücretsiz Dene")
-2. **Uygulama** (`/app`): Ticker gir + soru yaz + cevap al
-3. **Trace paneli** (yan kolonda): Planner alt görevleri, hangi kaynağa gidildi,
-   kaç retry, hangi KAP belgesi kullanıldı — yatırımcı güven için şeffaflık kritik.
-4. **Fiyatlandırma** (`/pricing`): Free vs Pro
-
-### Teknik Notlar
-- `shadcn/ui` ile hızlı bileşen kurulumu
-- Server-Sent Events (SSE) ile streaming yanıt — yanıt bekletmez, satır satır gelir
-- Mobil uyumlu — Türk yatırımcısı mobil ağırlıklı
-
----
-
-## 14. FAZ 8 — Eval Sistemi (2-3 gün)
-
-**Hedef:** Cevap kalitesini ölçüp iterasyon için temel oluştur.
-
-### BIST Soru Seti (`bist_test_questions.jsonl`)
-- 20-30 soru, 3 kategori:
-  - Tek-kaynaklı: "THYAO'nun 2024 net marjı nedir?"
-  - Çok-kaynaklı: "TUPRS'ın son 3 yılda temettü politikası ve bu dönemdeki kârlılık trendi nasıl?"
-  - Tuzak: "Şirket hiç açıklamadığı bir konuda" — "bilmiyorum" demeli
-
-### Metrikler
-- Doğruluk (LLM-as-judge, Türkçe)
-- Citation coverage (her cevabın kaç % KAP'a dayalı)
-- Ortalama retry sayısı
-- Yanıt süresi (hedef: <15 sn)
-
----
-
-## 15. FAZ 9 — Lansman (1 hafta)
-
-1. İlk 20 BIST hissesi için KAP verisi yükle (BIST-30 başlangıç için yeterli).
-2. `agentick.io` canlıya al (Railway deployment).
-3. Langfuse ile LLM çağrılarını izle (maliyet + kalite).
-4. Dağıtım kanalları:
-   - Reddit: r/Borsasi, r/TurkishInvestors
-   - Twitter/X: `#BIST`, `#borsa`, `#yatırım`
-   - Discord: Türk yatırımcı toplulukları
-5. İlk 50 kullanıcı → feedback topla → iterate.
-
----
-
-## 16. Ortam Değişkenleri (.env.example)
+### Graf Yapısı
 
 ```
-# LLM
-ANTHROPIC_API_KEY=
-
-# Embedding
-VOYAGE_API_KEY=
-EMBEDDING_MODEL=voyage-3
-
-# Vector DB
-QDRANT_URL=
-QDRANT_API_KEY=
-
-# Database & Auth
-SUPABASE_URL=
-SUPABASE_ANON_KEY=
-SUPABASE_SERVICE_ROLE_KEY=
-
-# Ödeme
-STRIPE_SECRET_KEY=
-STRIPE_WEBHOOK_SECRET=
-
-# KAP scraping
-KAP_REQUEST_DELAY_SECONDS=2   # Rate limiting
-
-# Agent
-MAX_RETRY_COUNT=3
-
-# LLM Gözlemlenebilirlik
-LANGFUSE_PUBLIC_KEY=
-LANGFUSE_SECRET_KEY=
+START
+  ↓
+planner_node
+  ↓
+router_node
+  ↓
+critic_node ──── "retry" ──→ planner_node
+  │
+  └── "synthesize" ──→ synthesizer_node ──→ END
 ```
 
----
+### Node Detayları
 
-## 17. Maliyet Tahmini (Aylık, 100 Pro Kullanıcı)
-
-| Kalem | Tahmini Maliyet |
-|---|---|
-| Claude API (100 kullanıcı × 50 sorgu × ~4 LLM çağrısı) | ~$40-80 |
-| Voyage-3 embedding | ~$5 |
-| Qdrant Cloud | $0 (free tier başlangıç) |
-| Supabase | $0 (free tier) |
-| Railway deployment | ~$5-10 |
-| **Toplam** | **~$50-100/ay** |
-
-100 Pro kullanıcı × ₺199 = **~₺20.000/ay gelir** karşısında sürdürülebilir.
-
----
-
-## 18. Riskler
-
-| Risk | Önlem |
-|---|---|
-| KAP site yapısı değişir | Scraper'ı modüler yaz, URL yapısını config'den oku |
-| Sonsuz retry | `MAX_RETRY_COUNT=3`, test edilmeli |
-| Yüksek LLM maliyeti | Planner/router için claude-haiku-4-5, sadece synthesizer'da sonnet |
-| Yanlış finansal bilgi | Her cevaba "Bu bilgi yatırım tavsiyesi değildir" notu + KAP linkleri zorunlu |
-| BIST dışı soru | Ticker yoksa veya BIST dışı ise "Bu soru kapsam dışıdır" cevabı |
-
----
-
-## 19. Faz Özeti
-
-| Faz | İçerik | Süre |
+| Node | Model | Görev |
 |---|---|---|
-| 1 | KAP veri katmanı + naive RAG | 3-4 gün |
-| 2 | 4 retriever bağımsız çalışır | 3-4 gün |
-| 3 | LangGraph agent orkestrasyonu | 3-4 gün |
-| 4 | Self-critique / retry döngüsü | 2-3 gün |
-| 5 | Synthesizer + kaynak gösterme | 1-2 gün |
-| 6 | Auth + Freemium + Stripe | 3-4 gün |
-| 7 | Next.js frontend | 3-5 gün |
-| 8 | Eval sistemi | 2-3 gün |
-| 9 | Lansman | 3-5 gün |
-
-**Toplam:** ~6-8 hafta (günde 3-4 saat)
+| Planner | Claude Haiku 4.5 | Sohbet geçmişini dikkate alarak soruyu rewrite et, sql/vector sub_task'lar üret |
+| Router | — | asyncio.gather ile paralel retriever çağrısı, duplicate filtreleme |
+| Critic | Claude Haiku 4.5 | Toplanan bilginin yeterliliğini değerlendir |
+| Synthesizer | Claude Sonnet 4.6 | Max 12 kaynak, Türkçe, kaynaklı yanıt |
 
 ---
 
-## 20. Agentic RAG ile Yapılabilecekler (Sonraki Özellikler)
+## 3. Retriever Katmanı
 
-| Özellik | Açıklama |
+### SQL Retriever (`src/retrievers/sql_retriever.py`)
+
+**Akış:**
+1. Claude Haiku → Türkçe soru → SQL sorgusu
+2. SQLite'ta çalıştır
+3. Sonuçları düz metin + citation olarak döndür
+
+**Desteklenen tablolar:**
+
+| Tablo | İçerik | Kaynak |
+|---|---|---|
+| `income_statement` | Gelir, brüt kâr, EBITDA, net kâr | yfinance |
+| `balance_sheet` | Varlıklar, borç, özkaynak, nakit | yfinance |
+| `cash_flow` | Operasyonel, yatırım, finansman, serbest nakit akışı | yfinance |
+| `ratios` | P/E, P/B, net marj, ROE, ROA, D/E, piyasa değeri, fiyat | yfinance |
+| `pdf_tables` | PDF'den çıkarılan tablolar (pipe-delimited metin) | pdfplumber |
+
+**Citation formatları:**
+- yfinance tabloları: `yfinance — THYAO income_statement (2024-12-31 – 2022-12-31)`
+- PDF tabloları: `PDF — THYAO THYAO_faaliyet_2026.pdf`
+
+**Önemli davranışlar:**
+- `pdf_tables` sorgularında OR koşulları parantez içinde (prompt kuralı)
+- `pdf_tables` çıktısı: `[Sayfa N — dosya_adı]\n{table_text}` formatı
+- Finansal tablo çıktısı: `period_date=... | net_margin=...` formatı
+
+### Vector Retriever (`src/retrievers/vector_retriever.py`)
+
+**Model:** `paraphrase-multilingual-mpnet-base-v2` (768 boyut, Türkçe destekli)
+**Collection:** `kap_filings`
+**Filtreleme:** `ticker` payload filtresi ile hisseye özgü arama
+
+**Citation formatı:** `KAP — THYAO Faaliyet Raporu, s.23 (Finansal Durum)`
+
+**Çıktı yapısı:**
+```python
+{
+    "text": "chunk metni",
+    "ticker": "THYAO",
+    "page": 23,
+    "section": "Finansal Durum",
+    "source_file": "THYAO_faaliyet_2026.pdf",
+    "score": 0.87,           # cosine similarity
+    "citation": "KAP — ..."
+}
+```
+
+### Router'da Duplicate Önleme
+
+Her retry'da `state["retrieved"]` içindeki mevcut `text` değerleri bir `set`'e alınır. Yeni sonuçlar bu set'e göre filtrelenir — aynı chunk iki kez eklenmez. Her retry gerçekten yeni bilgi ekler.
+
+---
+
+## 4. Ingestion Pipeline
+
+### PDF Yükleme Akışı
+
+```
+POST /api/upload/sync
+    ↓
+backend/services/pdf_pipeline.py → process_pdf(pdf_path, ticker)
+    │
+    ├── 1. Tablo Çıkarma (pdfplumber)
+    │       Her sayfadaki tabloları al
+    │       Satırları "| " ile birleştir
+    │       SQLite pdf_tables'a yaz
+    │       (Aynı dosya yeniden yüklenirse önce eski kayıtları sil)
+    │
+    ├── 2. Metin Indexleme
+    │       PyMuPDF → sayfa bazlı metin
+    │       pdf_chunker → semantic chunks (600 token, 80 overlap)
+    │       SentenceTransformer → 768D embedding
+    │       Qdrant → upsert (ticker payload filtresi)
+    │
+    └── 3. yfinance Güncellemesi
+            bist_finance_client.fetch_and_store(ticker)
+            income_statement, balance_sheet, cash_flow, ratios → SQLite
+```
+
+### yfinance Çekme Akışı
+
+```
+POST /api/fetch-data {ticker: "THYAO"}
+    ↓
+bist_finance_client.fetch_and_store("THYAO")
+    ↓
+yf.Ticker("THYAO.IS")
+    ├── income_stmt → income_statement tablosu
+    ├── balance_sheet → balance_sheet tablosu
+    ├── cashflow → cash_flow tablosu
+    └── info (P/E, P/B, ROE, fiyat...) → ratios tablosu
+```
+
+---
+
+## 5. FastAPI Backend
+
+### Endpoint'ler
+
+| Method | Endpoint | Açıklama |
+|---|---|---|
+| GET | `/api/health` | Sağlık kontrolü, versiyon |
+| POST | `/api/upload` | PDF yükle (arka planda, async) |
+| POST | `/api/upload/sync` | PDF yükle ve indexle (senkron, frontend kullanır) |
+| POST | `/api/ask` | Soru sor, LangGraph agent yanıtını bekle |
+| POST | `/api/fetch-data` | yfinance verisini çek ve SQLite'a yaz |
+
+### `/api/ask` Request / Response
+
+```python
+# Request
+class AskRequest(BaseModel):
+    question: str
+    ticker: str
+    conversation_history: list[dict] = []   # [{"role": "user|assistant", "content": "..."}]
+
+# Response
+{
+    "answer": str,                           # Türkçe yanıt
+    "ticker": str,
+    "sub_tasks": list[dict],                 # [{"query": "...", "type": "sql|vector"}]
+    "retrieved_count": int,                  # Toplam unique kaynak sayısı
+    "retry_count": int,                      # Kaç retry yapıldı
+    "critic_feedback": str                   # Son critic kararı
+}
+```
+
+---
+
+## 6. React Frontend
+
+### Bileşen Hiyerarşisi
+
+```
+App.tsx
+├── Sidebar.tsx                 # Konuşma geçmişi + yeni sohbet
+│   └── [Conversation listesi]
+└── Ana Alan
+    ├── Header (chat modunda)   # Logo + ticker dropdown
+    ├── [Boş durum]             # Logo + öneri sorular + ChatInput
+    └── [Chat durumu]
+        ├── Message.tsx (×N)    # Kullanıcı / assistant mesajları
+        ├── ThinkingIndicator   # 4 aşamalı animasyon (loading)
+        └── ChatInput.tsx       # Soru girişi + PDF upload + fetch data
+```
+
+### State Yönetimi (App.tsx)
+
+```typescript
+conversations: Conversation[]    // localStorage'dan, tüm geçmiş
+active: Conversation | null      // Aktif konuşma
+defaultTicker: string            // Sohbet yokken seçili ticker
+loading: boolean                 // Agent yanıt bekliyor
+suggestion: string | undefined   // Öneri soru chip'i tıklandığında
+```
+
+### Konuşma Hafızası
+
+- Her konuşma localStorage'da ayrı bir `Conversation` nesnesi olarak saklanır.
+- `handleSend()` her mesaj sonrası localStorage'ı günceller.
+- `/api/ask` çağrısında `conversation_history` olarak son N mesaj gönderilir.
+- Planner bu geçmişi kullanarak takip sorularını standalone hale getirir.
+
+### ChatInput Özellikleri
+
+- **Ticker dropdown:** 30 BIST hissesi (alfabetik)
+- **PDF upload:** `POST /api/upload/sync`, anlık progress bar
+- **Fetch data butonu (↺):** `POST /api/fetch-data`, spinner + başarı/hata mesajı
+- **Textarea:** Enter = gönder, Shift+Enter = satır sonu, auto-resize
+
+### conversationStorage.ts
+
+```typescript
+interface Conversation {
+    id: string
+    title: string               // İlk sorudan otomatik üretilir
+    ticker: string
+    messages: MessageData[]
+    createdAt: string
+    updatedAt: string
+}
+```
+
+Gruplar: Bugün / Dün / Bu Hafta / Daha Önce
+
+---
+
+## 7. Veri Modelleri
+
+### SQLite — `data/bist_financials.db`
+
+```sql
+CREATE TABLE income_statement (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    period_date TEXT,           -- YYYY-MM-DD
+    revenue REAL,               -- TL
+    gross_profit REAL,
+    ebitda REAL,
+    net_income REAL
+);
+
+CREATE TABLE balance_sheet (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    period_date TEXT,
+    total_assets REAL,
+    total_debt REAL,
+    total_equity REAL,
+    cash REAL
+);
+
+CREATE TABLE cash_flow (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    period_date TEXT,
+    operating_cf REAL,
+    investing_cf REAL,
+    financing_cf REAL,
+    free_cf REAL
+);
+
+CREATE TABLE ratios (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    period_date TEXT,
+    pe_ratio REAL,
+    pb_ratio REAL,
+    net_margin REAL,            -- %
+    roe REAL,
+    roa REAL,
+    debt_to_equity REAL,
+    market_cap REAL,
+    current_price REAL          -- TRY
+);
+
+CREATE TABLE pdf_tables (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    source_file TEXT NOT NULL,
+    page INTEGER,
+    table_index INTEGER,        -- Sayfadaki sıra (0'dan başlar)
+    table_text TEXT NOT NULL,   -- "Sütun1 | Sütun2\nSatır1 | Satır2"
+    uploaded_at TEXT
+);
+```
+
+### Qdrant — `kap_filings` Collection
+
+```
+Vector: 768 boyut, cosine distance
+Payload:
+    ticker: keyword
+    page: integer
+    section: keyword
+    source_file: keyword
+    chunk_index: integer
+```
+
+---
+
+## 8. Teknoloji Stack
+
+| Katman | Teknoloji | Versiyon |
+|---|---|---|
+| LLM (Sentez) | Claude Sonnet 4.6 | claude-sonnet-4-6 |
+| LLM (Planner/Critic) | Claude Haiku 4.5 | claude-haiku-4-5-20251001 |
+| Agent Orkestrasyonu | LangGraph | ≥0.2.0 |
+| Embedding (lokal) | paraphrase-multilingual-mpnet-base-v2 | sentence-transformers ≥5.6 |
+| Vektör DB | Qdrant Cloud | EU-Central-1 |
+| İlişkisel DB | SQLite | Python built-in |
+| Finansal Veri | yfinance | ≥1.5.1 |
+| PDF — Metin | PyMuPDF (fitz) | ≥1.28.0 |
+| PDF — Tablo | pdfplumber | ≥0.11.0 |
+| Backend | FastAPI + Uvicorn | ≥0.115.0 |
+| Frontend | React 18 + TypeScript | 18.3.1 + 5.5.3 |
+| Build | Vite | 5.4.8 |
+| CSS | Tailwind CSS | 3.4.13 |
+| İkonlar | lucide-react | latest |
+| Gözlemlenebilirlik | LangSmith | LANGCHAIN_TRACING_V2=true |
+| Paket Yönetimi (PY) | uv | latest |
+| Paket Yönetimi (JS) | npm | latest |
+
+---
+
+## 9. Ortam Değişkenleri
+
+```env
+# LLM
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Vektör DB
+QDRANT_URL=https://xxx.eu-central-1-0.aws.cloud.qdrant.io
+QDRANT_API_KEY=...
+
+# LangSmith (isteğe bağlı)
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_API_KEY=lsv2_pt_...
+LANGCHAIN_PROJECT=agentick
+```
+
+---
+
+## 10. Desteklenen BIST-30 Hisseleri
+
+```
+AKBNK  AKSEN  ARCLK  ASELS  BIMAS
+EKGYO  ENKAI  EREGL  FROTO  GARAN
+GUBRF  HALKB  ISCTR  KCHOL  KONTR
+KOZAL  KRDMD  ODAS   PETKM  PGSUS
+SAHOL  SASA   SISE   TAVHL  TCELL
+THYAO  TOASO  TUPRS  VAKBN  YKBNK
+```
+
+---
+
+## 11. İmplementasyon Durumu
+
+| Bileşen | Durum |
 |---|---|
-| Şirket karşılaştırma | "THYAO vs PEGASUS — marj ve büyüme karşılaştır" |
-| Temettü takvimi | KAP özel durum + yfinance — otomatik temettü özeti |
-| Haber etkisi analizi | "Bu haber hisseye nasıl etki etti?" — haber + fiyat korelasyonu |
-| Sektör analizi | Havacılık sektörü genelinde birden fazla şirketi karşılaştır |
-| Portföy analizi | Kullanıcının birden fazla hissesini aynı anda analiz et |
-| Fiyat alarmı + özet | Hisse belirli seviyeye gelince KAP özetini otomatik gönder |
-| PDF export | Analiz sonucunu kaynaklı PDF olarak indir |
+| LangGraph agent (Planner → Router → Critic → Synthesizer) | ✅ |
+| SQL Retriever (yfinance + pdf_tables) | ✅ |
+| Vector Retriever (Qdrant) | ✅ |
+| PDF Pipeline (tablo + metin + yfinance) | ✅ |
+| FastAPI backend (upload, ask, fetch-data) | ✅ |
+| React frontend (sidebar, chat, ChatInput) | ✅ |
+| Konuşma hafızası (localStorage + API) | ✅ |
+| LangSmith tracing | ✅ |
+| Router duplicate önleme | ✅ |
+| BIST-30 ticker desteği | ✅ |
+| Auth + kullanıcı kotası | ❌ Planlandı |
+| Haber Retriever | ❌ Planlandı |
+| KAP Özel Durum Retriever | ❌ Planlandı |
+| Deployment (Railway / Render) | ❌ Planlandı |
+
+---
+
+## 12. Sonraki Adımlar
+
+1. **Auth** — Supabase ile kullanıcı girişi, aylık sorgu kotası
+2. **Haber Retriever** — Bloomberg HT / Dünya gazetesi başlıkları
+3. **KAP Özel Durum Retriever** — Temettü, sermaye artırımı bildirimleri
+4. **Deployment** — Railway (backend) + Vercel/Netlify (frontend)
+5. **Eval sistemi** — 30 BIST sorusu ile doğruluk metrikleri
