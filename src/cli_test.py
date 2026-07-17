@@ -10,7 +10,7 @@ import os
 import argparse
 from dotenv import load_dotenv
 
-from openai import OpenAI
+import anthropic
 
 from src.retrievers.vector_retriever import search
 
@@ -45,18 +45,17 @@ def ask(soru: str, ticker: str) -> str:
     context = "\n\n---\n\n".join(context_parts)
 
     # 3. Claude'a gönder
-    # Ollama — yerel, ücretsiz, API key gerekmez
-    client = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
-    message = client.chat.completions.create(
-        model="llama3.2",
+    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    message = client.messages.create(
+        model="claude-sonnet-4-6",
         max_tokens=1024,
+        system=SYSTEM_PROMPT,
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": f"Belgeler:\n\n{context}\n\nSoru: {soru}"}
         ]
     )
 
-    return message.choices[0].message.content
+    return message.content[0].text
 
 
 if __name__ == "__main__":
