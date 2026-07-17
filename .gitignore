@@ -1,7 +1,25 @@
+# Ortam
 .env
+
+# Veri
 data/raw/
 data/processed/
 data/*.db
+
+# Python
 __pycache__/
 .venv/
 *.pyc
+*.pyo
+.python-version
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Build / Cache
+.cache/
+*.egg-info/
+dist/
+build/
