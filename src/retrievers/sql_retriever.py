@@ -64,6 +64,21 @@ Tablo: ratios
   debt_to_equity REAL  -- Borç/Özkaynak oranı
   market_cap REAL      -- Piyasa değeri (TL)
   current_price REAL   -- Güncel fiyat (TRY)
+
+Tablo: dividends
+  ticker TEXT      -- Hisse kodu (ör. TUPRS)
+  ex_date TEXT     -- Temettü ödeme tarihi (YYYY-MM-DD)
+  amount REAL      -- Hisse başı temettü tutarı (TL)
+
+Tablo: news_articles
+  id INTEGER           -- Birincil anahtar
+  source TEXT           -- Haber kaynağı (ör. Bloomberg HT)
+  title TEXT            -- Haber başlığı
+  link TEXT             -- Haber bağlantısı (UNIQUE)
+  summary TEXT          -- Haber özeti
+  published_at TEXT     -- Yayın tarihi (YYYY-MM-DD HH:MM:SS)
+  fetched_at TEXT       -- Çekilme tarihi (YYYY-MM-DD HH:MM:SS)
+  tickers TEXT          -- Eşleşen hisse kodları, virgülle ayrılmış (ör. "THYAO,TAVHL")
 """
 
 TEXT_TO_SQL_PROMPT = """Sen bir finansal veritabanı uzmanısın. Kullanıcının Türkçe sorusunu SQLite SQL sorgusuna çevir.
@@ -79,6 +94,7 @@ Kurallar:
 - Sadece SQL döndür, açıklama ekleme.
 - pdf_tables sorgularında OR koşullarını parantez içine al: WHERE ticker = 'X' AND (table_text LIKE '%a%' OR table_text LIKE '%b%').
 - pdf_tables için her zaman ticker filtresi ekle.
+- Temettü verimi (dividend yield) sorulursa: dividends tablosundan son 12 ayın toplam temettüsünü, ratios tablosundan güncel fiyatı (current_price) al ve yield = (toplam_temettü / current_price) * 100 hesapla. Örnek: SELECT d.ticker, ROUND(SUM(d.amount),2) AS toplam_temettu, r.current_price, ROUND(SUM(d.amount)/r.current_price*100, 2) AS temettu_verimi_pct FROM dividends d JOIN ratios r ON d.ticker = r.ticker WHERE d.ticker = '{ticker}' AND d.ex_date >= date('now','-1 year') AND r.current_price IS NOT NULL GROUP BY d.ticker ORDER BY r.period_date DESC LIMIT 1;
 
 Ticker: {ticker}
 Soru: {question}
@@ -163,7 +179,7 @@ def search(question: str, ticker: str = "THYAO", top_k: int = 5) -> list[dict]:
         return []
 
     # Hangi tablolar sorgulandı?
-    all_tables = ["income_statement", "balance_sheet", "cash_flow", "ratios", "pdf_tables"]
+    all_tables = ["income_statement", "balance_sheet", "cash_flow", "ratios", "dividends", "pdf_tables"]
     tables = [t for t in all_tables if t in sql]
     source = ", ".join(tables) if tables else "finansal tablolar"
 

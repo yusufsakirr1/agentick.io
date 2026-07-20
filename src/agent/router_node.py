@@ -8,6 +8,7 @@ import asyncio
 from src.agent.state import AgentState
 from src.retrievers.sql_retriever import search as sql_search
 from src.retrievers.vector_retriever import search as vector_search
+from src.retrievers.news_retriever import search as news_search
 
 
 async def router_node(state: AgentState) -> dict:
@@ -19,10 +20,21 @@ async def router_node(state: AgentState) -> dict:
         task_type = task["type"]
         try:
             if task_type == "sql":
-                return await asyncio.to_thread(sql_search, query, state["ticker"])
+                results = await asyncio.to_thread(sql_search, query, state["ticker"])
+                # SQL boş döndüyse → yfinance'den çek, tekrar dene
+                if not results:
+                    from src.ingestion.bist_finance_client import fetch_and_store
+                    print(f"  SQL boş döndü, yfinance'den çekiliyor: {state['ticker']}")
+                    await asyncio.to_thread(fetch_and_store, state["ticker"])
+                    results = await asyncio.to_thread(sql_search, query, state["ticker"])
+                return results
             elif task_type == "vector":
                 return await asyncio.to_thread(
                     vector_search, query, state["ticker"], top_k
+                )
+            elif task_type == "news":
+                return await asyncio.to_thread(
+                    news_search, query, state["ticker"], top_k
                 )
         except Exception as e:
             return [{"text": f"Retrieval hatası ({task_type}): {e}", "citation": "hata", "score": 0.0}]

@@ -425,3 +425,106 @@ Proje genelinde yapılan değişiklikler nedeniyle her iki doküman eski bilgile
 - [ ] Haber Retriever (Bloomberg HT / Dünya gazetesi)
 - [ ] KAP Özel Durum Retriever (temettü, sermaye artırımı bildirimleri)
 - [ ] Deployment — Railway (backend) + Vercel (frontend)
+
+---
+
+## 2026-07-22 — Salı
+**Faz: Faz 3.5 — Temettü Verisi, Auto-Fetch ve Haber Retriever**
+
+Bu oturumda agent'ın veri kapsamı genişletildi: temettü verisi, otomatik veri çekme ve haber retriever eklendi. Ayrıca TUPRS 504 sayfalık faaliyet raporu ile performans testi yapıldı.
+
+---
+
+### Adım 1 — Temettü Verisi (yfinance .dividends)
+
+**Sorun:** Agent'a "temettü kararı ne?" diye sorulduğunda veri bulunamıyordu — temettü bilgisi hiçbir tabloda yoktu.
+
+**Çözüm:**
+- `src/ingestion/bist_finance_client.py` → `dividends` tablosu eklendi (`ticker`, `ex_date`, `amount`)
+- `create_tables()` içine `CREATE TABLE IF NOT EXISTS dividends` eklendi
+- `fetch_and_store()` içine `yf_ticker.dividends` çekme bloğu eklendi (oranlar bölümünden sonra)
+- `src/retrievers/sql_retriever.py` → `DB_SCHEMA`'ya `dividends` tablosu tanımı eklendi, `all_tables` listesine dahil edildi
+
+**Test:** TUPRS için 24 temettü ödemesi başarıyla kaydedildi.
+
+---
+
+### Adım 2 — Auto-Fetch: SQL Boş Dönünce Otomatik Veri Çekme
+
+**Sorun:** `fetch_and_store()` sadece CLI'dan elle çalıştırılıyordu. Kullanıcı yeni bir hisse sorduğunda SQLite'ta veri yoksa agent 3 kez retry edip "veri bulunamadı" diyordu.
+
+**Çözüm:**
+- `src/agent/router_node.py` → `run_task()` içinde SQL bloğuna auto-fetch eklendi
+- SQL sorgusu boş dönerse → `fetch_and_store(ticker)` çağrılır → aynı sorgu tekrar çalıştırılır
+- Lazy import: `from src.ingestion.bist_finance_client import fetch_and_store` sadece gerektiğinde yüklenir
+- Veri zaten varsa fetch tetiklenmez (ilk sorgu sonuç döner)
+
+**Test:** THYAO dividends tablosu boşken "THYAO temettü geçmişi ne?" soruldu → otomatik çekildi → 4 temettü ödemesi kaydedilip cevap verildi.
+
+---
+
+### Adım 3 — Temettü Verimi (Dividend Yield) Hesaplama
+
+**Sorun:** Agent "temettü verimi" sorulduğunda "fiyat bilgisi yok" diyordu — oysa `ratios` tablosunda `current_price` zaten var.
+
+**Çözüm:**
+- `src/retrievers/sql_retriever.py` → `TEXT_TO_SQL_PROMPT` kurallarına temettü verimi ipucu eklendi
+- `yield = (son 12 ay toplam temettü / current_price) * 100` formülü ile SQL JOIN örneği verildi
+- Yeni tablo/veri gerekmedi — mevcut `dividends` + `ratios.current_price` JOIN'i yeterli
+
+**Test:** "TUPRS son 2 yıl temettü tutarları ve verimleri?" → %2,57 ve %3,59 yield doğru hesaplandı.
+
+---
+
+### Adım 4 — 504 Sayfalık Faaliyet Raporu Performans Testi
+
+TUPRS 2025 entegre faaliyet raporu (504 sayfa) yüklendi ve 5 farklı soru tipiyle test edildi:
+
+| Soru | Retriever | Sonuç |
+|---|---|---|
+| "TUPRS toplam borç/özkaynak oranı ne?" | SQL + Vektör | 4 yıllık veri + yorum — Mükemmel |
+| "TUPRS risk faktörleri nelerdir?" | SQL + Vektör | 7 kategori, sayfa ref. — Mükemmel |
+| "TUPRS son 3 yılda net kârı nasıl değişti ve yönetim ne diyor?" | SQL + Vektör | Sayısal + nitel birlikte — Mükemmel |
+| "TUPRS ham petrol işleme maliyeti nedir?" | SQL + Vektör | "Belgede yok" — Doğru (hallüsinasyon yok) |
+| "TUPRS son 2 yıl temettü tutarları ve verimleri?" | SQL | Yield hesaplama dahil — Mükemmel |
+
+Agent 504 sayfalık rapordan doğru sayfa referanslarıyla bilgi çekiyor, bulamadığında dürüstçe söylüyor.
+
+---
+
+### Adım 5 — Dokümantasyon Güncellemesi
+
+- `dokuman.md` güncellendi: Gelecek çalışmalar bölümü eklendi (çoklu şirket karşılaştırma, screening, portföy analizi, zaman serisi takibi, KAP entegrasyonu)
+- `mimari.md` güncellendi: dividends tablosu, news_articles tablosu, auto-fetch mekanizması, news retriever detayları eklendi
+- `README.md` güncellendi: news retriever, auto-fetch, temettü verimi, genişletilmiş soru örnekleri
+- `daily_log.md` güncellendi (bu kayıt)
+
+---
+
+### Çözülen Sorunlar
+
+| Sorun | Çözüm |
+|---|---|
+| Temettü verisi hiçbir tabloda yoktu | `dividends` tablosu + yfinance `.dividends` eklendi |
+| Yeni hisse sorulduğunda "veri bulunamadı" | Auto-fetch: SQL boş → yfinance'den çek → tekrar sorgula |
+| Temettü verimi hesaplanamıyordu | SQL prompt'a `dividends JOIN ratios` ipucu eklendi |
+
+---
+
+### Faz 3.5 Çıktı Kriterleri ✅
+
+- ✅ Temettü verisi çekilip sorgulanıyor
+- ✅ Temettü verimi (yield) güncel fiyat üzerinden hesaplanıyor
+- ✅ SQL boş dönünce otomatik yfinance fetch tetikleniyor
+- ✅ 504 sayfalık rapordan doğru, kaynaklı cevaplar geliyor
+- ✅ Haber retriever (news) çalışıyor
+
+---
+
+### Sıradaki — Faz 4
+
+- [ ] Çoklu şirket karşılaştırma (multi-ticker)
+- [ ] Otomatik screening/alert
+- [ ] Zaman serisi takibi ve bildirim
+- [ ] Portföy analizi
+- [ ] Auth + Deployment

@@ -70,10 +70,19 @@ def create_tables(conn: sqlite3.Connection) -> None:
             UNIQUE(ticker, period_date)
         );
 
+        CREATE TABLE IF NOT EXISTS dividends (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker      TEXT NOT NULL,
+            ex_date     TEXT NOT NULL,
+            amount      REAL,
+            UNIQUE(ticker, ex_date)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_income_ticker ON income_statement(ticker);
         CREATE INDEX IF NOT EXISTS idx_balance_ticker ON balance_sheet(ticker);
         CREATE INDEX IF NOT EXISTS idx_cf_ticker ON cash_flow(ticker);
         CREATE INDEX IF NOT EXISTS idx_ratios_ticker ON ratios(ticker);
+        CREATE INDEX IF NOT EXISTS idx_div_ticker ON dividends(ticker);
     """)
     conn.commit()
 
@@ -228,6 +237,24 @@ def fetch_and_store(ticker: str) -> None:
         print(f"  Oranlar: dönemsel net marjlar + anlık veriler kaydedildi (fiyat: {info.get('currentPrice')} TRY)")
     except Exception as e:
         print(f"  Oranlar hatası: {e}")
+
+    # --- Temettü ---
+    try:
+        divs = yf_ticker.dividends
+        if divs is not None and not divs.empty:
+            rows = 0
+            for date, amount in divs.items():
+                date_str = str(date.date()) if hasattr(date, "date") else str(date)[:10]
+                conn.execute(
+                    """INSERT OR REPLACE INTO dividends (ticker, ex_date, amount)
+                       VALUES (?, ?, ?)""",
+                    (ticker, date_str, _safe(amount)),
+                )
+                rows += 1
+            conn.commit()
+            print(f"  Temettü: {rows} ödeme kaydedildi")
+    except Exception as e:
+        print(f"  Temettü hatası: {e}")
 
     conn.close()
     print(f"\nTamamlandı. Veritabanı: {DB_PATH}")

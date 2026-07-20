@@ -29,12 +29,14 @@ FastAPI Backend (Uvicorn, port 8000)
         PLANNER NODE (Claude Haiku)
             Sohbet geçmişini okur
             Soruyu standalone hale getirir
-            Alt görevler üretir: [{query, type: "sql"|"vector"}]
+            Alt görevler üretir: [{query, type: "sql"|"vector"|"news"}]
             │
             ▼
         ROUTER NODE (asyncio.gather)
             ├── type="sql"    → SQL Retriever → SQLite
-            └── type="vector" → Vector Retriever → Qdrant
+            │                    └── boş dönerse → auto-fetch (yfinance) → tekrar sorgula
+            ├── type="vector" → Vector Retriever → Qdrant
+            └── type="news"   → News Retriever → SQLite (news_articles)
             │
             ▼
         CRITIC NODE (Claude Haiku)
@@ -89,8 +91,8 @@ critic_node ──── "retry" ──→ planner_node
 
 | Node | Model | Görev |
 |---|---|---|
-| Planner | Claude Haiku 4.5 | Sohbet geçmişini dikkate alarak soruyu rewrite et, sql/vector sub_task'lar üret |
-| Router | — | asyncio.gather ile paralel retriever çağrısı, duplicate filtreleme |
+| Planner | Claude Haiku 4.5 | Sohbet geçmişini dikkate alarak soruyu rewrite et, sql/vector/news sub_task'lar üret |
+| Router | — | asyncio.gather ile paralel retriever çağrısı, duplicate filtreleme, auto-fetch |
 | Critic | Claude Haiku 4.5 | Toplanan bilginin yeterliliğini değerlendir |
 | Synthesizer | Claude Sonnet 4.6 | Max 12 kaynak, Türkçe, kaynaklı yanıt |
 
@@ -113,7 +115,9 @@ critic_node ──── "retry" ──→ planner_node
 | `balance_sheet` | Varlıklar, borç, özkaynak, nakit | yfinance |
 | `cash_flow` | Operasyonel, yatırım, finansman, serbest nakit akışı | yfinance |
 | `ratios` | P/E, P/B, net marj, ROE, ROA, D/E, piyasa değeri, fiyat | yfinance |
+| `dividends` | Temettü tarihi ve hisse başı tutar | yfinance |
 | `pdf_tables` | PDF'den çıkarılan tablolar (pipe-delimited metin) | pdfplumber |
+| `news_articles` | Haber başlıkları, özetleri, kaynak ve tarih | RSS (Bloomberg HT vb.) |
 
 **Citation formatları:**
 - yfinance tabloları: `yfinance — THYAO income_statement (2024-12-31 – 2022-12-31)`
@@ -123,6 +127,25 @@ critic_node ──── "retry" ──→ planner_node
 - `pdf_tables` sorgularında OR koşulları parantez içinde (prompt kuralı)
 - `pdf_tables` çıktısı: `[Sayfa N — dosya_adı]\n{table_text}` formatı
 - Finansal tablo çıktısı: `period_date=... | net_margin=...` formatı
+- Temettü verimi sorulursa: `dividends` + `ratios.current_price` JOIN ile hesaplanır
+
+### Auto-Fetch Mekanizması
+
+Router'da SQL retriever boş sonuç döndüğünde:
+1. `fetch_and_store(ticker)` çağrılır (yfinance'den tüm veri çekilir)
+2. Aynı SQL sorgusu tekrar çalıştırılır
+3. Veri zaten varsa fetch tetiklenmez (ilk sorgu sonuç döner)
+
+```python
+# router_node.py — run_task() içinde
+if task_type == "sql":
+    results = await asyncio.to_thread(sql_search, query, state["ticker"])
+    if not results:
+        from src.ingestion.bist_finance_client import fetch_and_store
+        await asyncio.to_thread(fetch_and_store, state["ticker"])
+        results = await asyncio.to_thread(sql_search, query, state["ticker"])
+    return results
+```
 
 ### Vector Retriever (`src/retrievers/vector_retriever.py`)
 
@@ -144,6 +167,21 @@ critic_node ──── "retry" ──→ planner_node
     "citation": "KAP — ..."
 }
 ```
+
+### News Retriever (`src/retrievers/news_retriever.py`)
+
+**Kaynak:** RSS beslemeleri (Bloomberg HT, Dünya gazetesi vb.)
+**Depolama:** SQLite `news_articles` tablosu
+**Süre:** 30 günlük cache, stale olunca otomatik yenileme
+
+**Skor hesaplama:**
+- 0.5 baz puan
+- +0.3 başlıkta keyword eşleşmesi
+- +0.1 özette keyword eşleşmesi
+- +0.1 ticker eşleşmesi
+- +0.1 yayın tarihi varsa
+
+**Citation formatı:** `Haber — Bloomberg HT (2026-07-20)`
 
 ### Router'da Duplicate Önleme
 
@@ -188,7 +226,8 @@ yf.Ticker("THYAO.IS")
     ├── income_stmt → income_statement tablosu
     ├── balance_sheet → balance_sheet tablosu
     ├── cashflow → cash_flow tablosu
-    └── info (P/E, P/B, ROE, fiyat...) → ratios tablosu
+    ├── info (P/E, P/B, ROE, fiyat...) → ratios tablosu
+    └── dividends → dividends tablosu
 ```
 
 ---
@@ -334,6 +373,13 @@ CREATE TABLE ratios (
     current_price REAL          -- TRY
 );
 
+CREATE TABLE dividends (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    ex_date TEXT,               -- Temettü ödeme tarihi (YYYY-MM-DD)
+    amount REAL                 -- Hisse başı temettü tutarı (TL)
+);
+
 CREATE TABLE pdf_tables (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ticker TEXT NOT NULL,
@@ -342,6 +388,17 @@ CREATE TABLE pdf_tables (
     table_index INTEGER,        -- Sayfadaki sıra (0'dan başlar)
     table_text TEXT NOT NULL,   -- "Sütun1 | Sütun2\nSatır1 | Satır2"
     uploaded_at TEXT
+);
+
+CREATE TABLE news_articles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT,                -- Haber kaynağı (ör. Bloomberg HT)
+    title TEXT,
+    link TEXT UNIQUE,
+    summary TEXT,
+    published_at TEXT,
+    fetched_at TEXT,
+    tickers TEXT                -- Virgülle ayrılmış ticker'lar (ör. "THYAO,TAVHL")
 );
 ```
 
@@ -421,24 +478,32 @@ THYAO  TOASO  TUPRS  VAKBN  YKBNK
 | LangGraph agent (Planner → Router → Critic → Synthesizer) | ✅ |
 | SQL Retriever (yfinance + pdf_tables) | ✅ |
 | Vector Retriever (Qdrant) | ✅ |
+| News Retriever (RSS haber arama) | ✅ |
+| Temettü verisi (yfinance .dividends) | ✅ |
+| Temettü verimi hesaplama (dividends JOIN ratios) | ✅ |
+| Auto-fetch (SQL boş → yfinance'den çek → tekrar sorgula) | ✅ |
 | PDF Pipeline (tablo + metin + yfinance) | ✅ |
-| FastAPI backend (upload, ask, fetch-data) | ✅ |
+| FastAPI backend (upload, ask, fetch-data, fetch-news) | ✅ |
 | React frontend (sidebar, chat, ChatInput) | ✅ |
 | Konuşma hafızası (localStorage + API) | ✅ |
 | LangSmith tracing | ✅ |
 | Router duplicate önleme | ✅ |
 | BIST-30 ticker desteği | ✅ |
+| Çoklu şirket karşılaştırma | ❌ Planlandı |
+| Otomatik screening/alert | ❌ Planlandı |
+| Portföy analizi | ❌ Planlandı |
 | Auth + kullanıcı kotası | ❌ Planlandı |
-| Haber Retriever | ❌ Planlandı |
-| KAP Özel Durum Retriever | ❌ Planlandı |
 | Deployment (Railway / Render) | ❌ Planlandı |
 
 ---
 
 ## 12. Sonraki Adımlar
 
-1. **Auth** — Supabase ile kullanıcı girişi, aylık sorgu kotası
-2. **Haber Retriever** — Bloomberg HT / Dünya gazetesi başlıkları
-3. **KAP Özel Durum Retriever** — Temettü, sermaye artırımı bildirimleri
-4. **Deployment** — Railway (backend) + Vercel/Netlify (frontend)
-5. **Eval sistemi** — 30 BIST sorusu ile doğruluk metrikleri
+1. **Çoklu Şirket Karşılaştırma** — Multi-ticker desteği, cross-ticker SQL sorguları
+2. **Otomatik Screening/Alert** — Kriter bazlı hisse taraması, bildirim
+3. **Zaman Serisi Takibi** — Watchlist, temettü/fiyat bildirimi
+4. **Portföy Analizi** — Portföy yükleme, sektör dağılımı, risk analizi
+5. **KAP Entegrasyonu** — Özel durum açıklamaları, endeks değişiklikleri
+6. **Auth** — Supabase ile kullanıcı girişi, aylık sorgu kotası
+7. **Deployment** — Railway (backend) + Vercel (frontend)
+8. **Eval sistemi** — 30 BIST sorusu ile doğruluk metrikleri

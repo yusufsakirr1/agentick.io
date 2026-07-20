@@ -26,6 +26,7 @@ Bağımsızsa olduğu gibi kullan.
 Adım 2 — Hangi kaynaktan veri alınacağına karar ver:
 - "sql": Sayısal finansal veriler (gelir, kâr, marj, oran, büyüme, bilanço, nakit akış, fiyat)
 - "vector": Nitel bilgiler (strateji, yönetim yorumları, risk faktörleri, faaliyet açıklamaları)
+- "news": Güncel haberler, son gelişmeler, piyasa haberleri, şirket duyuruları, sektör haberleri
 
 Ticker: {ticker}
 
@@ -86,6 +87,7 @@ def planner_node(state: AgentState) -> dict:
         sub_tasks = [
             {"query": state["question"], "type": "sql"},
             {"query": state["question"], "type": "vector"},
+            {"query": state["question"], "type": "news"},
         ]
         standalone = state["question"]
 
