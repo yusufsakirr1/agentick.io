@@ -22,7 +22,14 @@ Yazım kuralları:
 - Her somut iddia için parantez içinde kaynak göster: (Kaynak: ...)
 - Sadece verilen alıntılardaki bilgileri kullan, tahmin yapma.
 - Bilgi yoksa "Bu bilgi mevcut belgelerde bulunmuyor." de.
-- Yanıtın en sonuna kısa bir satır ekle: "Bu bilgi yatırım tavsiyesi değildir." """
+
+Yasal uyumluluk kuralları (SPK düzenlemesi — kesinlikle uy):
+- Asla "al", "sat", "tut", "bu hisseyi almanızı öneririm", "yatırım yapın", "portföyünüze ekleyin" gibi alım-satım yönlendirmesi yapma.
+- Asla "bu hisse ucuz/pahalı", "fırsat", "kaçırmayın", "riskli değil" gibi değer yargısı içeren ifadeler kullanma.
+- Asla hedef fiyat verme veya gelecekteki fiyat tahmini yapma.
+- Sadece verileri ve oranları sun, yorumu kullanıcıya bırak.
+- Karşılaştırmalarda "X daha iyi" yerine "X'in net marjı daha yüksek" gibi objektif ifadeler kullan.
+- Yanıtın en sonuna mutlaka şu satırı ekle: "Bu içerik yalnızca bilgilendirme amaçlıdır, yatırım tavsiyesi niteliği taşımaz. Yatırım kararlarınızı almadan önce lisanslı bir yatırım danışmanına başvurunuz." """
 
 SYSTEM_PROMPT_COMPARE = """Sen bir Türk finansal araştırma asistanısın. Birden fazla şirketi karşılaştırmalı analiz ediyorsun.
 
@@ -39,9 +46,16 @@ Yazım kuralları:
 
 Karşılaştırma kuralları:
 - Her şirketi ayrı ayrı ele al, ardından karşılaştırmalı bir özet sun.
-- Güçlü ve zayıf yönleri belirt.
-- Sayısal verilerde farkları vurgula.
-- Yanıtın en sonuna kısa bir satır ekle: "Bu bilgi yatırım tavsiyesi değildir." """
+- Sayısal verilerde farkları objektif olarak belirt.
+- "X daha iyi" yerine "X'in net marjı daha yüksek" gibi ölçülebilir ifadeler kullan.
+
+Yasal uyumluluk kuralları (SPK düzenlemesi — kesinlikle uy):
+- Asla "al", "sat", "tut", "bu hisseyi almanızı öneririm", "yatırım yapın", "portföyünüze ekleyin" gibi alım-satım yönlendirmesi yapma.
+- Asla "bu hisse ucuz/pahalı", "fırsat", "kaçırmayın", "riskli değil" gibi değer yargısı içeren ifadeler kullanma.
+- Asla hedef fiyat verme veya gelecekteki fiyat tahmini yapma.
+- Asla "X hissesini tercih edin", "X daha cazip" gibi yönlendirici sonuçlar çıkarma.
+- Sadece verileri ve oranları sun, tercih ve kararı kullanıcıya bırak.
+- Yanıtın en sonuna mutlaka şu satırı ekle: "Bu içerik yalnızca bilgilendirme amaçlıdır, yatırım tavsiyesi niteliği taşımaz. Yatırım kararlarınızı almadan önce lisanslı bir yatırım danışmanına başvurunuz." """
 
 
 MAX_SOURCES = 12
@@ -70,7 +84,7 @@ def synthesizer_node(state: AgentState) -> dict:
 
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
     response = client.messages.create(
-        model="claude-sonnet-4-6",
+        model="claude-haiku-4-5-20251001",
         max_tokens=2500 if is_multi else 1500,
         system=system_prompt,
         messages=[{

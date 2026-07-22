@@ -4,8 +4,10 @@ POST /api/ask — Soruyu LangGraph agent'a yönlendir.
 
 import asyncio
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
+
+from backend.auth import get_current_user
 
 from src.agent.graph import run_agent
 
@@ -19,7 +21,7 @@ class AskRequest(BaseModel):
 
 
 @router.post("/ask")
-async def ask(request: AskRequest):
+async def ask(request: AskRequest, current_user: dict = Depends(get_current_user)):
     ticker = request.ticker.upper().strip()
     question = request.question.strip()
 

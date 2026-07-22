@@ -332,37 +332,76 @@ class CompareAskRequest(BaseModel):
 ### Bileşen Hiyerarşisi
 
 ```
-main.tsx (BrowserRouter)
-└── App.tsx (Layout shell + Routes)
-    ├── Sidebar.tsx                 # Sohbet/Karşılaştır navigasyonu + konuşma listesi
-    │   ├── [Navigasyon tabları]    # useNavigate + useLocation
-    │   └── [Conversation listesi]
-    └── Ana Alan (Routes)
-        ├── Route "/" → ChatPage.tsx
-        │   ├── Header (chat modunda)   # Logo + ticker dropdown
-        │   ├── [Boş durum]             # Logo + öneri sorular + ChatInput
-        │   └── [Chat durumu]
-        │       ├── Message.tsx (×N)
-        │       ├── ThinkingIndicator
-        │       └── ChatInput.tsx
-        └── Route "/compare" → ComparePage.tsx
-            ├── Header              # Logo + "Karşılaştırma" etiketi
-            ├── TickerSelector.tsx   # Multi-select (2 ticker, badge + dropdown)
-            ├── ComparisonTable.tsx  # Metrik tablosu (12 satır × N kolon)
-            └── ComparisonChat.tsx   # Karşılaştırma Q&A (ephemeral)
-                ├── Message.tsx (×N)
-                ├── ThinkingIndicator
-                └── Input bar (ticker badge'leri + textarea + send)
+main.tsx (BrowserRouter + AuthProvider)
+└── App.tsx (Auth guard + Layout shell + Routes)
+    │
+    ├── [!user] → LoginPage.tsx (Landing page — 9 bölüm)
+    │   ├── Navbar (frosted glass, logo + "Giriş Yap" + "Ücretsiz Başla")
+    │   ├── Hero Section (min-h-screen, 2 sütun, inline SVG chat mockup)
+    │   ├── Trust Strip (4 metrik: 500+ Hisse, RAG Motoru, Gerçek Zamanlı, Türkçe AI)
+    │   ├── Nasıl Çalışır? (3 adım, dashed connector, numaralı ikonlar)
+    │   ├── Özellikler (6 renkli kart, lg:grid-cols-3)
+    │   ├── Platform Önizleme (2 sütun, browser frame SVG mockup)
+    │   ├── FAQ Accordion (5 soru, useState toggle, chevron animasyonu)
+    │   ├── Final CTA (bg-gray-900, beyaz text + CTA)
+    │   └── Footer (3 sütun: logo+açıklama | ürün linkleri | iletişim, © 2026)
+    │
+    └── [user] → Layout shell (Sidebar + Routes)
+        ├── Sidebar.tsx                 # Sohbet/Karşılaştır navigasyonu + konuşma listesi
+        │   ├── [Navigasyon tabları]    # useNavigate + useLocation
+        │   └── [Conversation listesi]
+        └── Ana Alan (Routes)
+            ├── Route "/" → ChatPage.tsx
+            │   ├── Header (chat modunda)   # Logo + ticker dropdown
+            │   ├── [Boş durum]             # Logo + öneri sorular + ChatInput
+            │   └── [Chat durumu]
+            │       ├── Message.tsx (×N)
+            │       ├── ThinkingIndicator
+            │       └── ChatInput.tsx
+            └── Route "/compare" → ComparePage.tsx
+                ├── Header              # Logo + "Karşılaştırma" etiketi
+                ├── TickerSelector.tsx   # Multi-select (2 ticker, badge + dropdown)
+                ├── ComparisonTable.tsx  # Metrik tablosu (12 satır × N kolon)
+                └── ComparisonChat.tsx   # Karşılaştırma Q&A (ephemeral)
+                    ├── Message.tsx (×N)
+                    ├── ThinkingIndicator
+                    └── Input bar (ticker badge'leri + textarea + send)
+```
+
+### Auth Akışı
+
+```
+Kullanıcı ilk gelir → App.tsx: user=null → LoginPage gösterilir
+    │
+    ├── "Ücretsiz Başla" / "Giriş Yap" tıklanır
+    │       ↓
+    │   signInWithGoogle() → signInWithPopup(auth, googleProvider)
+    │       ↓
+    │   Firebase popup açılır → Google hesabı seçilir
+    │       ↓
+    │   onAuthStateChanged → user set edilir → App.tsx re-render
+    │       ↓
+    │   user !== null → Layout shell + Routes gösterilir
+    │
+    └── Sidebar'da "Çıkış" tıklanır
+            ↓
+        signOut() → firebaseSignOut(auth)
+            ↓
+        user = null → LoginPage'e geri dönülür
 ```
 
 ### State Yönetimi (App.tsx)
 
 ```typescript
-conversations: Conversation[]    // localStorage'dan, tüm geçmiş
-active: Conversation | null      // Aktif konuşma
-defaultTicker: string            // Sohbet yokken seçili ticker
-loading: boolean                 // Agent yanıt bekliyor
-suggestion: string | undefined   // Öneri soru chip'i tıklandığında
+// Auth (AuthContext üzerinden)
+user: User | null               // Firebase Auth user nesnesi
+loading: boolean                // Auth durumu yükleniyor mu
+
+// App state
+messages: MessageData[]         // Aktif konuşma mesajları
+ticker: string                  // Seçili hisse kodu
+loading: boolean                // Agent yanıt bekliyor
+suggestion: string | undefined  // Öneri soru chip'i tıklandığında
 ```
 
 ### Shared Constants
@@ -512,6 +551,7 @@ Payload:
 | PDF — Tablo | pdfplumber | ≥0.11.0 |
 | Backend | FastAPI + Uvicorn | ≥0.115.0 |
 | Frontend | React 18 + TypeScript | 18.3.1 + 5.5.3 |
+| Auth | Firebase Authentication | Google OAuth popup |
 | Routing | react-router-dom | ^7.x |
 | Build | Vite | 5.4.8 |
 | CSS | Tailwind CSS | 3.4.13 |
@@ -531,6 +571,14 @@ ANTHROPIC_API_KEY=sk-ant-...
 # Vektör DB
 QDRANT_URL=https://xxx.eu-central-1-0.aws.cloud.qdrant.io
 QDRANT_API_KEY=...
+
+# Firebase (frontend .env)
+VITE_FIREBASE_API_KEY=...
+VITE_FIREBASE_AUTH_DOMAIN=...
+VITE_FIREBASE_PROJECT_ID=...
+VITE_FIREBASE_STORAGE_BUCKET=...
+VITE_FIREBASE_MESSAGING_SENDER_ID=...
+VITE_FIREBASE_APP_ID=...
 
 # LangSmith (isteğe bağlı)
 LANGCHAIN_TRACING_V2=true
@@ -576,10 +624,13 @@ THYAO  TOASO  TUPRS  VAKBN  YKBNK
 | Sidebar navigasyonu (Sohbet/Karşılaştır) | ✅ |
 | Shared constants (BIST_TICKERS tek kaynak) | ✅ |
 | Router task timeout (30s) + Qdrant timeout (15s) | ✅ |
+| Firebase Auth (Google OAuth, AuthContext) | ✅ |
+| Landing Page (9 bölüm, inline SVG mockup'lar, FAQ accordion) | ✅ |
+| Auth guard (App.tsx'te user kontrolü) | ✅ |
 | Otomatik screening/alert | ❌ Planlandı |
 | Portföy analizi | ❌ Planlandı |
-| Auth + kullanıcı kotası | ❌ Planlandı |
-| Deployment (Railway / Render) | ❌ Planlandı |
+| Kullanıcı kotası (Firestore) | ❌ Planlandı |
+| Deployment (Railway / Vercel) | ❌ Planlandı |
 
 ---
 
@@ -589,6 +640,7 @@ THYAO  TOASO  TUPRS  VAKBN  YKBNK
 2. **Zaman Serisi Takibi** — Watchlist, temettü/fiyat bildirimi
 3. **Portföy Analizi** — Portföy yükleme, sektör dağılımı, risk analizi
 4. **KAP Entegrasyonu** — Özel durum açıklamaları, endeks değişiklikleri
-5. **Auth** — Supabase ile kullanıcı girişi, aylık sorgu kotası
-6. **Deployment** — Railway (backend) + Vercel (frontend)
+5. **Deployment** — Railway (backend) + Vercel (frontend)
+6. **Kullanıcı Kotası** — Firestore ile aylık sorgu limiti
 7. **Eval sistemi** — 30 BIST sorusu ile doğruluk metrikleri
+8. **Stripe Entegrasyonu** — ₺199/ay Pro abonelik

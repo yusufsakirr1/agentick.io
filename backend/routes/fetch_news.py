@@ -2,8 +2,10 @@
 Haber çekme ve arama endpoint'leri.
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
+
+from backend.auth import get_current_user
 
 from src.ingestion.news_client import fetch_news_if_stale, cleanup_old_news, search_news
 
@@ -17,7 +19,7 @@ class NewsSearchRequest(BaseModel):
 
 
 @router.post("/fetch-news")
-def fetch_news():
+def fetch_news(current_user: dict = Depends(get_current_user)):
     """RSS kaynaklarından haberleri çeker (cache bayatsa)."""
     new_count = fetch_news_if_stale()
     deleted = cleanup_old_news()
@@ -28,7 +30,7 @@ def fetch_news():
 
 
 @router.post("/news/search")
-def search_news_endpoint(req: NewsSearchRequest):
+def search_news_endpoint(req: NewsSearchRequest, current_user: dict = Depends(get_current_user)):
     """Haber arama endpoint'i."""
     articles = search_news(ticker=req.ticker, query=req.query, top_k=req.top_k)
     return {

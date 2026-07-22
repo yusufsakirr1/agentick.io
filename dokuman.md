@@ -26,8 +26,11 @@ Her oturuma bu dosyayı atarak nereden devam edeceğimizi belirleriz.
 | İlişkisel DB | SQLite | Aktif |
 | Finansal Veri | yfinance | Aktif |
 | PDF İşleme | pdfplumber (tablolar) + PyMuPDF (metin) | Aktif |
+| Auth | Firebase Authentication (Google OAuth) | Aktif |
 | Backend | FastAPI + Uvicorn | Aktif |
 | Frontend | React 18 + TypeScript + Vite + Tailwind CSS | Aktif |
+| Routing (Frontend) | react-router-dom v7 | Aktif |
+| İkonlar | lucide-react | Aktif |
 | Gözlemlenebilirlik | LangSmith | Aktif |
 
 ---
@@ -65,14 +68,20 @@ agentick.io/
 │       └── build_vector_index.py   # chunks → Qdrant
 ├── frontend/
 │   └── src/
-│       ├── main.tsx            # BrowserRouter sarma
-│       ├── App.tsx             # Layout shell + Routes
+│       ├── main.tsx            # BrowserRouter + AuthProvider sarma
+│       ├── App.tsx             # Auth guard + Layout shell + Routes
+│       ├── config/
+│       │   └── firebase.ts     # Firebase config + GoogleAuthProvider
+│       ├── contexts/
+│       │   └── AuthContext.tsx  # Firebase Auth context (signInWithGoogle, signOut)
 │       ├── constants/
 │       │   └── tickers.ts      # BIST-30 tek kaynak
 │       ├── pages/
+│       │   ├── LoginPage.tsx   # Landing page (9 bölüm, inline SVG mockup'lar)
 │       │   ├── ChatPage.tsx    # Sohbet sayfası
 │       │   └── ComparePage.tsx # Karşılaştırma sayfası
 │       ├── components/
+│       │   ├── AgentLogo.tsx   # Marka logosu (lucide MousePointerClick)
 │       │   ├── Sidebar.tsx     # Sohbet/Karşılaştır navigasyonu
 │       │   ├── ChatInput.tsx
 │       │   ├── Message.tsx
@@ -102,10 +111,11 @@ agentick.io/
 | 3 | LangGraph Agent + FastAPI + React Frontend | ✅ |
 | 3.5 | Haber Retriever + Temettü + Auto-fetch | ✅ |
 | 4 | Çoklu Şirket Karşılaştırma | ✅ |
+| 5 | Firebase Auth + Landing Page Yeniden Tasarım | ✅ |
 
 ---
 
-## Son Durum (Faz 4 sonrası)
+## Son Durum (Faz 5 sonrası)
 
 ### Çalışan Özellikler
 - LangGraph agent: Planner → Router → Critic → Synthesizer döngüsü
@@ -122,6 +132,9 @@ agentick.io/
 - **Karşılaştırma chat:** Seçili hisseler hakkında serbest soru-cevap (multi-ticker agent)
 - **React Router:** `/` (sohbet) ve `/compare` (karşılaştırma) sayfaları
 - **Sidebar navigasyonu:** Sohbet / Karşılaştır sekmeli geçiş
+- **Firebase Auth:** Google OAuth ile giriş, AuthContext + AuthProvider pattern
+- **Landing Page:** 9 bölümlük profesyonel SaaS sayfası — Navbar, Hero (inline SVG chat mockup), Trust Strip, Nasıl Çalışır (3 adım), Özellikler (6 renkli kart), Platform Önizleme (browser frame SVG), FAQ Accordion (5 soru, useState toggle), Koyu CTA Banner, Detaylı Footer
+- **Auth Guard:** `App.tsx`'te `!user` kontrolü → LoginPage gösterimi, giriş sonrası otomatik yönlendirme
 
 ### API Endpoint'leri
 
@@ -149,7 +162,7 @@ Kullanıcının belirlediği kriterlere göre hisse taraması ve bildirim. Örne
 
 **Gerekli:** Tüm BIST-30 hisseleri için periyodik veri çekme (cron/scheduler), screening query engine.
 
-### 3. Zaman Serisi Takibi ve Bildirim
+### 2. Zaman Serisi Takibi ve Bildirim
 Hisse takibi ve önemli olay bildirimi. Örnek:
 - "TUPRS'u takip et, temettü açıklanınca bildir"
 - "THYAO fiyatı 350 TL'yi geçerse uyar"
@@ -157,7 +170,7 @@ Hisse takibi ve önemli olay bildirimi. Örnek:
 
 **Gerekli:** Kullanıcı bazlı watchlist, background scheduler, push notification (email/webhook).
 
-### 4. Portföy Analizi
+### 3. Portföy Analizi
 Kullanıcının portföyünü yükleyip analiz edebilmesi. Örnek:
 - "5 hissemi yükledim, portföyümün sektör dağılımı ne?"
 - "Portföyümün toplam temettü geliri ne kadar?"
@@ -165,7 +178,7 @@ Kullanıcının portföyünü yükleyip analiz edebilmesi. Örnek:
 
 **Gerekli:** Portföy veri modeli, sektör/endüstri sınıflandırma, ağırlıklı metrik hesaplama.
 
-### 5. BIST'e Özel Domain Bilgisi ve KAP Entegrasyonu
+### 4. BIST'e Özel Domain Bilgisi ve KAP Entegrasyonu
 ChatGPT genel amaçlı — agentick BIST'e özel. Fark yaratan özellikler:
 - KAP özel durum açıklamaları (temettü, sermaye artırımı, birleşme) otomatik çekme
 - BIST endeks değişiklikleri takibi
@@ -174,8 +187,8 @@ ChatGPT genel amaçlı — agentick BIST'e özel. Fark yaratan özellikler:
 
 **Gerekli:** KAP veri dağıtım sözleşmesi veya alternatif veri kaynakları (Finnet, Matriks, İş Yatırım API).
 
-### 6. Altyapı ve Ürünleştirme
-- Auth — Supabase ile kullanıcı girişi, aylık sorgu kotası
+### 5. Ürünleştirme ve Deployment
+- Kullanıcı başına aylık sorgu kotası (Firestore)
 - Deployment — Railway (backend) + Vercel (frontend)
 - Eval sistemi — 30 BIST sorusu ile doğruluk metrikleri
 - Stripe entegrasyonu — ₺199/ay abonelik
@@ -184,4 +197,4 @@ ChatGPT genel amaçlı — agentick BIST'e özel. Fark yaratan özellikler:
 
 ## Devam Edilecek Yer
 
-Çoklu şirket karşılaştırma tamamlandı. Sıradaki en yüksek değerli özellik **Otomatik Screening** — tüm BIST-30 için periyodik veri çekme ve kullanıcının belirlediği kriterlere göre hisse taraması. Ardından **Auth + Deployment** ile ürünleştirme yapılabilir.
+Auth ve landing page tamamlandı. Sıradaki en yüksek değerli özellik **Otomatik Screening** — tüm BIST-30 için periyodik veri çekme ve kullanıcının belirlediği kriterlere göre hisse taraması. Ardından **Deployment** (Railway + Vercel) ile canlıya alınabilir.

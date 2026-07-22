@@ -5,7 +5,9 @@ POST /api/upload — PDF yükle ve indexle.
 import shutil
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, UploadFile, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, File, Form, UploadFile, HTTPException, BackgroundTasks
+
+from backend.auth import get_current_user
 
 from backend.services.pdf_pipeline import process_pdf
 
@@ -20,6 +22,7 @@ async def upload_pdf(
     background_tasks: BackgroundTasks,
     ticker: str = Form(...),
     file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
 ):
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Sadece PDF dosyaları kabul edilir.")
@@ -47,6 +50,7 @@ async def upload_pdf(
 async def upload_pdf_sync(
     ticker: str = Form(...),
     file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
 ):
     """Sonucu bekleyerek yükle (test için)."""
     if not file.filename or not file.filename.lower().endswith(".pdf"):

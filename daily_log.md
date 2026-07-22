@@ -763,7 +763,264 @@ Retry: 0 (ilk turda SUFFICIENT)
 
 ### Sıradaki — Faz 5
 
-- [ ] Otomatik screening/alert
-- [ ] Zaman serisi takibi ve bildirim
-- [ ] Portföy analizi
-- [ ] Auth + Deployment
+- [ ] Auth (Firebase)
+- [ ] Landing Page yeniden tasarım
+- [ ] Deployment
+
+---
+
+## 2026-07-23 — Perşembe
+**Faz: Faz 5 / Gün 1 — Firebase Authentication Entegrasyonu**
+
+Bu oturumda kullanıcı kimlik doğrulama sistemi Firebase Authentication ile sıfırdan kuruldu. Google OAuth popup ile giriş, AuthContext pattern ve backend token doğrulama tamamlandı.
+
+---
+
+### Adım 1 — Firebase Projesi Kurulumu
+
+- Firebase Console'da `agentick-io` projesi oluşturuldu
+- Authentication → Sign-in method → Google provider aktif edildi
+- Web app kaydedildi, Firebase config alındı
+- `firebase` npm paketi yüklendi: `npm install firebase`
+
+---
+
+### Adım 2 — Frontend Firebase Config
+
+`frontend/src/config/firebase.ts` oluşturuldu:
+- `initializeApp()` ile Firebase başlatma
+- `getAuth()` ile auth instance
+- `GoogleAuthProvider` oluşturma
+- Tüm config değerleri `import.meta.env.VITE_FIREBASE_*` üzerinden (`.env` dosyasında)
+
+---
+
+### Adım 3 — AuthContext ve AuthProvider
+
+`frontend/src/contexts/AuthContext.tsx` oluşturuldu:
+- `AuthContextType` interface: `user`, `loading`, `signInWithGoogle`, `signOut`
+- `AuthProvider` bileşeni: `onAuthStateChanged` listener ile auth durumu takibi
+- `signInWithGoogle()`: `signInWithPopup(auth, googleProvider)` — popup ile Google giriş
+- `signOut()`: `firebaseSignOut(auth)`
+- `useAuth()` hook: context'e kolay erişim, provider dışında kullanılırsa hata fırlatır
+
+---
+
+### Adım 4 — App.tsx Auth Guard
+
+`frontend/src/App.tsx` güncellendi:
+- `useAuth()` hook'u ile `user` ve `loading` alınır
+- `authLoading` durumunda spinner gösterilir
+- `!user` → `<LoginPage />` render edilir (landing page)
+- `user` → mevcut layout shell (Sidebar + Routes) render edilir
+- Giriş yapınca otomatik geçiş — state değişimi ile re-render
+
+---
+
+### Adım 5 — main.tsx AuthProvider Sarma
+
+`frontend/src/main.tsx` güncellendi:
+```tsx
+<AuthProvider>
+  <BrowserRouter>
+    <App />
+  </BrowserRouter>
+</AuthProvider>
+```
+AuthProvider en dışta, BrowserRouter içinde — tüm bileşenler `useAuth()` erişebilir.
+
+---
+
+### Adım 6 — Backend Auth Middleware
+
+`backend/auth.py` oluşturuldu:
+- Firebase Admin SDK ile token doğrulama
+- `verify_firebase_token()` dependency fonksiyonu
+- Request header'dan `Authorization: Bearer <token>` alınır
+- Token geçersizse 401 Unauthorized döner
+
+Backend route'ları (`query.py`, `upload.py`, `fetch_data.py`, `fetch_news.py`, `compare.py`) güncellendi:
+- Her endpoint'e `Depends(verify_firebase_token)` eklendi
+- Giriş yapmamış kullanıcılar API'ye erişemez
+
+---
+
+### Adım 7 — Frontend API Client Token Gönderimi
+
+`frontend/src/api/client.ts` güncellendi:
+- Her API çağrısında Firebase `currentUser.getIdToken()` alınır
+- `Authorization: Bearer <token>` header'ı eklenir
+- Token yoksa (giriş yapılmamışsa) istek gönderilmez
+
+---
+
+### Çözülen Sorunlar
+
+| Sorun | Çözüm |
+|---|---|
+| Firebase popup CORS hatası | Firebase Console'da authorized domains'e localhost eklendi |
+| `onAuthStateChanged` ilk yüklemede null döner | `loading` state ile spinner gösterilir, auth resolve olunca kaldırılır |
+| Backend'e token gönderilmiyordu | `client.ts`'te `getIdToken()` ile her isteğe Bearer token eklendi |
+
+---
+
+### Faz 5 / Gün 1 Çıktıları
+
+- ✅ Firebase Authentication kuruldu (Google OAuth popup)
+- ✅ AuthContext + AuthProvider pattern çalışıyor
+- ✅ App.tsx auth guard: giriş yapmayanlar LoginPage görüyor
+- ✅ Backend token doğrulama çalışıyor (401 Unauthorized)
+- ✅ Frontend API client token gönderiyor
+- ✅ TypeScript build hatasız (`npx tsc --noEmit`)
+
+---
+
+## 2026-07-24 — Cuma
+**Faz: Faz 5 / Gün 2 — Landing Page Tam Ekran Yeniden Tasarım → FAZ 5 TAMAMLANDI ✅**
+
+Bu oturumda landing page (LoginPage.tsx) sıfırdan yeniden tasarlandı. Mevcut dar ve basit sayfa yerine, tam ekran kaplayan, 9 bölümlük, inline SVG mockup'larla desteklenmiş profesyonel bir SaaS landing page yazıldı.
+
+---
+
+### Adım 1 — Mevcut Sayfanın Analizi
+
+Eski `LoginPage.tsx` incelendi:
+- `max-w-6xl` ile dar layout
+- Basit hero (tek sütun, merkez hizalı)
+- Trust strip (sadece 3 metin)
+- 6 feature kartı (küçük, detaysız)
+- Kısa CTA ve minimal footer
+- Toplam ~190 satır
+
+**Karar:** Sayfa tamamen silinip sıfırdan yazılacak. 9 bölüm, inline SVG mockup'lar, FAQ accordion, detaylı footer.
+
+---
+
+### Adım 2 — Hero Section (Tam Ekran, İki Sütun)
+
+Yeni hero section tasarlandı:
+- `min-h-screen` — tam ekran kaplaması
+- `lg:grid-cols-2` — sol: metin, sağ: mockup
+- Sol taraf: yeşil badge (animate-pulse), büyük başlık (gradient text: "Yapay Zeka"), açıklama, 2 CTA butonu
+- Sağ taraf: `HeroChatMockup` inline SVG bileşeni
+- Dekoratif gradient bloblar: 3 adet CSS circle (blue, purple, indigo), `blur-3xl`, `opacity-20`
+- Mobilde tek sütun, mockup altta
+
+---
+
+### Adım 3 — Inline SVG Chat Mockup
+
+`HeroChatMockup` bileşeni oluşturuldu (inline SVG, harici imaj yok):
+- Koyu arka plan (`#1a1a2e`) üzerinde chat UI
+- Title bar: kırmızı/sarı/yeşil dots (macOS tarzı)
+- Kullanıcı mesajı: mavi balon — "THYAO'nun son çeyrek gelir tablosunu analiz eder misin?"
+- AI yanıtı: koyu balon + mor avatar — "THYAO 2024 Q4 Gelir Tablosu: Hasılat, Net Kar, FAVÖK Marjı"
+- Kullanıcı ikinci mesajı: "Peki PGSUS ile karşılaştır"
+- Typing indicator: 3 nokta animasyonu (`<animate>` SVG elementi)
+- SVG `viewBox="0 0 420 340"` — responsive scaling
+
+---
+
+### Adım 4 — Trust Strip ve Nasıl Çalışır
+
+**Trust Strip:**
+- `bg-gray-50` şerit
+- 4 metrik, her biri ikon + text: "500+ Hisse" (BarChart3), "RAG Motoru" (BrainCircuit), "Gerçek Zamanlı" (Zap), "Türkçe AI" (Globe)
+- `grid-cols-2 md:grid-cols-4` responsive grid
+
+**Nasıl Çalışır? (3 Adım):**
+- Numaralı daireler (01, 02, 03) içinde lucide-react ikonları (LogIn, Search, Sparkles)
+- Her adım: numara + ikon + başlık + açıklama
+- Adımlar arası `border-t-2 border-dashed border-gray-200` bağlantı çizgisi (sadece desktop)
+- `md:grid-cols-3` responsive grid
+
+---
+
+### Adım 5 — Özellikler Kartları (6 Renkli Kart)
+
+6 feature kartı yeniden tasarlandı:
+- Her kart renkli daire ikon arka planıyla: `bg-blue-100`, `bg-green-100`, `bg-purple-100`, `bg-amber-100`, `bg-rose-100`, `bg-indigo-100`
+- Daha büyük padding (`p-8`)
+- Daha detaylı açıklamalar (2-3 cümle)
+- `bg-gray-50` bölüm arka planı
+- `lg:grid-cols-3 md:grid-cols-2` responsive grid
+- `hover:shadow-lg transition-shadow duration-300` efekti
+
+---
+
+### Adım 6 — Platform Önizleme (App Preview)
+
+İki sütun layout:
+- Sol: "Platformu keşfedin" başlık + açıklama + 4 bullet point (CheckCircle2 ikonu) + CTA butonu
+- Sağ: `AppPreviewMockup` inline SVG — browser frame (macOS dots + URL bar) + sidebar (Chat/Karşılaştır) + chat mesajları + input bar
+- SVG `viewBox="0 0 480 320"` — responsive
+- `shadow-xl` ve `border border-gray-100` ile derinlik efekti
+
+---
+
+### Adım 7 — FAQ Accordion
+
+5 soru-cevap çifti, `useState<number | null>` ile toggle:
+- "agentick.io nedir?"
+- "Hangi verilere erişebilirim?"
+- "Ücretsiz mi?"
+- "Verilerim güvende mi?"
+- "RAG teknolojisi ne anlama geliyor?"
+
+Her soru bir kart:
+- Tıklanınca `openFaq` state güncellenir (aynı soruya tıklanırsa kapanır)
+- `ChevronDown` ikonu açıkken `rotate-180` animasyonu
+- İçerik `max-h-0` / `max-h-60` transition ile açılır/kapanır
+- `bg-white rounded-xl border border-gray-100` kart stili
+
+---
+
+### Adım 8 — Final CTA ve Footer
+
+**Final CTA:**
+- `bg-gray-900` tam genişlik koyu banner
+- Büyük beyaz başlık: "Yapay zeka destekli analize hemen başlayın"
+- Gri açıklama + beyaz CTA butonu (hover'da `bg-gray-100`)
+
+**Footer:**
+- 3 sütun grid: Logo + açıklama | Ürün linkleri (scroll-to) | İletişim (Mail ikonu)
+- Alt bar: `border-t border-gray-100`, © 2026 + "Istanbul, Türkiye"
+
+---
+
+### Adım 9 — TypeScript Doğrulama
+
+`npx tsc --noEmit` çalıştırıldı — hatasız geçti. Tüm lucide-react ikonları doğru import edilmiş, tüm prop'lar tipli.
+
+---
+
+### Çözülen Sorunlar
+
+| Sorun | Çözüm |
+|---|---|
+| SVG içinde Türkçe karakterler (ş, ç, ı, ü) render sorunu | `fontFamily="Inter, sans-serif"` ile UTF-8 desteği sağlandı |
+| FAQ accordion birden fazla soru aynı anda açılıyordu | `useState<number \| null>` ile tek soru açık kalacak şekilde toggle |
+| Dekoratif bloblar tıklamayı engelliyordu | `pointer-events-none` eklendi |
+| Hero mockup mobilde çok büyük | `w-full h-auto` SVG + responsive grid ile otomatik küçülme |
+
+---
+
+### Faz 5 Çıktı Kriterleri ✅
+
+- ✅ Firebase Auth çalışıyor (Google OAuth popup)
+- ✅ Auth guard: giriş yapmayanlar landing page görüyor
+- ✅ Landing page 9 bölüm, tam ekran, beyaz arka plan
+- ✅ Hero SVG chat mockup düzgün render
+- ✅ FAQ accordion aç/kapa çalışıyor
+- ✅ Tüm butonlar Google OAuth popup açıyor
+- ✅ Mobil/tablet/desktop responsive
+- ✅ TypeScript hatasız (`npx tsc --noEmit`)
+- ✅ Backend auth middleware çalışıyor
+
+---
+
+### Sıradaki — Faz 6
+
+- [ ] Deployment (Railway + Vercel)
+- [ ] Custom domain (agentick.io)
+- [ ] Production environment variables

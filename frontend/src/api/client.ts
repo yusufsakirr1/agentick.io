@@ -1,4 +1,13 @@
+import { auth } from '../config/firebase'
+
 const BASE_URL = '/api'
+
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const user = auth.currentUser
+  if (!user) return {}
+  const token = await user.getIdToken()
+  return { Authorization: `Bearer ${token}` }
+}
 
 export interface UploadResult {
   status: string
@@ -62,8 +71,9 @@ export async function uploadPDF(ticker: string, file: File, sync = false): Promi
   form.append('ticker', ticker)
   form.append('file', file)
 
+  const authHeaders = await getAuthHeaders()
   const endpoint = sync ? `${BASE_URL}/upload/sync` : `${BASE_URL}/upload`
-  const res = await fetch(endpoint, { method: 'POST', body: form })
+  const res = await fetch(endpoint, { method: 'POST', headers: authHeaders, body: form })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(err.detail || 'Yükleme hatası')
@@ -72,9 +82,10 @@ export async function uploadPDF(ticker: string, file: File, sync = false): Promi
 }
 
 export async function fetchFinancialData(ticker: string): Promise<{ status: string; ticker: string }> {
+  const authHeaders = await getAuthHeaders()
   const res = await fetch(`${BASE_URL}/fetch-data`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders },
     body: JSON.stringify({ ticker }),
   })
   if (!res.ok) throw new Error('Veri çekme hatası')
@@ -86,9 +97,10 @@ export async function askQuestion(
   ticker: string,
   conversationHistory: Array<{ role: string; content: string }> = [],
 ): Promise<AskResult> {
+  const authHeaders = await getAuthHeaders()
   const res = await fetch(`${BASE_URL}/ask`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders },
     body: JSON.stringify({ question, ticker, conversation_history: conversationHistory }),
   })
   if (!res.ok) {
@@ -99,8 +111,11 @@ export async function askQuestion(
 }
 
 export async function fetchComparisonMetrics(tickers: string[]): Promise<ComparisonMetrics> {
+  const authHeaders = await getAuthHeaders()
   const params = tickers.join(',')
-  const res = await fetch(`${BASE_URL}/compare/metrics?tickers=${encodeURIComponent(params)}`)
+  const res = await fetch(`${BASE_URL}/compare/metrics?tickers=${encodeURIComponent(params)}`, {
+    headers: authHeaders,
+  })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(err.detail || 'Karşılaştırma verisi alınamadı')
@@ -113,9 +128,10 @@ export async function askCompareQuestion(
   tickers: string[],
   conversationHistory: Array<{ role: string; content: string }> = [],
 ): Promise<CompareAskResult> {
+  const authHeaders = await getAuthHeaders()
   const res = await fetch(`${BASE_URL}/compare/ask`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders },
     body: JSON.stringify({ question, tickers, conversation_history: conversationHistory }),
   })
   if (!res.ok) {
