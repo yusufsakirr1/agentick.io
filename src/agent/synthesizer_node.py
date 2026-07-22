@@ -24,6 +24,25 @@ Yazım kuralları:
 - Bilgi yoksa "Bu bilgi mevcut belgelerde bulunmuyor." de.
 - Yanıtın en sonuna kısa bir satır ekle: "Bu bilgi yatırım tavsiyesi değildir." """
 
+SYSTEM_PROMPT_COMPARE = """Sen bir Türk finansal araştırma asistanısın. Birden fazla şirketi karşılaştırmalı analiz ediyorsun.
+
+Sana verilen belge ve veri alıntılarını kullanarak kullanıcının karşılaştırma sorusunu Türkçe olarak yanıtla.
+
+Yazım kuralları:
+- Sade, akıcı Türkçe kullan. Emoji kullanma.
+- Markdown tablo kullanma; sayısal verileri düz metin veya madde listesiyle ver.
+- Başlık (##) kullanma; gerekirse kalın metin (**...**) ile vurgula.
+- Kısa ve öz yaz. Gereksiz tekrar etme.
+- Her somut iddia için parantez içinde kaynak göster: (Kaynak: ...)
+- Sadece verilen alıntılardaki bilgileri kullan, tahmin yapma.
+- Bilgi yoksa "Bu bilgi mevcut belgelerde bulunmuyor." de.
+
+Karşılaştırma kuralları:
+- Her şirketi ayrı ayrı ele al, ardından karşılaştırmalı bir özet sun.
+- Güçlü ve zayıf yönleri belirt.
+- Sayısal verilerde farkları vurgula.
+- Yanıtın en sonuna kısa bir satır ekle: "Bu bilgi yatırım tavsiyesi değildir." """
+
 
 MAX_SOURCES = 12
 
@@ -45,12 +64,15 @@ def synthesizer_node(state: AgentState) -> dict:
         return {"final_answer": "İlgili veri bulunamadı. Lütfen önce PDF yükleyin ve finansal veri çekin."}
 
     context = _build_context(retrieved)
+    tickers = state.get("tickers", [state["ticker"]])
+    is_multi = len(tickers) > 1
+    system_prompt = SYSTEM_PROMPT_COMPARE if is_multi else SYSTEM_PROMPT
 
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
     response = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=1500,
-        system=SYSTEM_PROMPT,
+        max_tokens=2500 if is_multi else 1500,
+        system=system_prompt,
         messages=[{
             "role": "user",
             "content": f"Belgeler:\n\n{context}\n\nSoru: {state['question']}"

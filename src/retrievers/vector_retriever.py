@@ -40,6 +40,7 @@ def search(query: str, ticker: str | None = None, top_k: int = 5) -> list[dict]:
     client = QdrantClient(
         url=os.environ["QDRANT_URL"],
         api_key=os.environ["QDRANT_API_KEY"],
+        timeout=15,
     )
 
     query_filter = None

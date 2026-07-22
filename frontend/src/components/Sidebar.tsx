@@ -1,7 +1,8 @@
 import { useState } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
 import AgentLogo from './AgentLogo'
 import { Conversation, remove } from '../services/conversationStorage'
-import { MessageCirclePlus, Clock } from 'lucide-react'
+import { MessageCirclePlus, Clock, GitCompareArrows } from 'lucide-react'
 
 interface Props {
   conversations: Conversation[]
@@ -13,6 +14,10 @@ interface Props {
 
 export default function Sidebar({ conversations, activeId, onSelect, onNew, onDelete }: Props) {
   const [hoveredId, setHoveredId] = useState<string | null>(null)
+  const navigate = useNavigate()
+  const location = useLocation()
+
+  const isCompare = location.pathname === '/compare'
 
   const handleDelete = (e: React.MouseEvent, id: string) => {
     e.stopPropagation()
@@ -23,9 +28,8 @@ export default function Sidebar({ conversations, activeId, onSelect, onNew, onDe
   return (
     <aside className="w-72 flex-shrink-0 bg-white rounded-2xl shadow-sm flex flex-col overflow-hidden">
 
-      {/* Üst — logo + yeni sohbet */}
+      {/* Logo + yeni sohbet */}
       <div className="px-4 pt-5 pb-3">
-        {/* Logo satırı */}
         <div className="flex items-center px-1 mb-5">
           <AgentLogo size={54} />
           <span
@@ -36,7 +40,6 @@ export default function Sidebar({ conversations, activeId, onSelect, onNew, onDe
           </span>
         </div>
 
-        {/* Yeni sohbet */}
         <button
           onClick={onNew}
           className="w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl text-sm font-semibold
@@ -45,6 +48,26 @@ export default function Sidebar({ conversations, activeId, onSelect, onNew, onDe
           <MessageCirclePlus className="w-5 h-5 text-gray-600 flex-shrink-0" strokeWidth={2} />
           Yeni Sohbet
         </button>
+
+        {/* Navigasyon tabları */}
+        <div className="flex gap-1 mt-3 bg-gray-100 rounded-xl p-1">
+          <button
+            onClick={() => navigate('/')}
+            className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors
+              ${!isCompare ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+          >
+            <MessageCirclePlus className="w-4 h-4" strokeWidth={2} />
+            Sohbet
+          </button>
+          <button
+            onClick={() => navigate('/compare')}
+            className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors
+              ${isCompare ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+          >
+            <GitCompareArrows className="w-4 h-4" strokeWidth={2} />
+            Karşılaştır
+          </button>
+        </div>
       </div>
 
       {/* Konuşma listesi */}
@@ -60,20 +83,18 @@ export default function Sidebar({ conversations, activeId, onSelect, onNew, onDe
               {conversations.map(c => (
                 <div
                   key={c.id}
-                  onClick={() => onSelect(c)}
+                  onClick={() => { onSelect(c); if (isCompare) navigate('/') }}
                   onMouseEnter={() => setHoveredId(c.id)}
                   onMouseLeave={() => setHoveredId(null)}
                   className={`relative flex items-center gap-2 px-3 py-2.5 rounded-xl cursor-pointer
                               transition-colors select-none
                     ${activeId === c.id ? 'bg-gray-200/80' : 'hover:bg-gray-200/60'}`}
                 >
-                  {/* Başlık */}
                   <span className={`text-sm truncate flex-1 min-w-0
                     ${activeId === c.id ? 'text-gray-900 font-medium' : 'text-gray-700'}`}>
                     {c.title || 'Yeni sohbet'}
                   </span>
 
-                  {/* Ticker badge — hover'da sil butonuyla yer değiştirir */}
                   {hoveredId === c.id ? (
                     <button
                       onClick={(e) => handleDelete(e, c.id)}
@@ -101,7 +122,7 @@ export default function Sidebar({ conversations, activeId, onSelect, onNew, onDe
         )}
       </div>
 
-      {/* Alt — kullanıcı */}
+      {/* Kullanıcı */}
       <div className="px-4 py-4 border-t border-gray-100">
         <div className="flex items-center gap-3 px-3 py-3 rounded-2xl hover:bg-gray-100 cursor-pointer transition-colors">
           <div className="w-10 h-10 rounded-full bg-black flex items-center justify-center text-white text-sm font-bold flex-shrink-0">

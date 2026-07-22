@@ -20,6 +20,43 @@ export interface AskResult {
   error?: string
 }
 
+export interface TickerMetrics {
+  ticker: string
+  current_price: number | null
+  market_cap: number | null
+  pe_ratio: number | null
+  pb_ratio: number | null
+  net_margin: number | null
+  roe: number | null
+  roa: number | null
+  debt_to_equity: number | null
+  dividend_yield: number | null
+  revenue: number | null
+  net_income: number | null
+  ebitda: number | null
+  total_assets: number | null
+  total_equity: number | null
+  total_debt: number | null
+  ratios_date: string | null
+  income_date: string | null
+}
+
+export interface ComparisonMetrics {
+  tickers: string[]
+  metrics: Record<string, TickerMetrics>
+  error?: string
+}
+
+export interface CompareAskResult {
+  answer: string
+  tickers: string[]
+  sub_tasks: Array<{ query: string; type: string }>
+  retrieved_count: number
+  retry_count: number
+  critic_feedback: string
+  error?: string
+}
+
 export async function uploadPDF(ticker: string, file: File, sync = false): Promise<UploadResult> {
   const form = new FormData()
   form.append('ticker', ticker)
@@ -57,6 +94,33 @@ export async function askQuestion(
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(err.detail || 'Sorgu hatası')
+  }
+  return res.json()
+}
+
+export async function fetchComparisonMetrics(tickers: string[]): Promise<ComparisonMetrics> {
+  const params = tickers.join(',')
+  const res = await fetch(`${BASE_URL}/compare/metrics?tickers=${encodeURIComponent(params)}`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(err.detail || 'Karşılaştırma verisi alınamadı')
+  }
+  return res.json()
+}
+
+export async function askCompareQuestion(
+  question: string,
+  tickers: string[],
+  conversationHistory: Array<{ role: string; content: string }> = [],
+): Promise<CompareAskResult> {
+  const res = await fetch(`${BASE_URL}/compare/ask`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question, tickers, conversation_history: conversationHistory }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(err.detail || 'Karşılaştırma sorgu hatası')
   }
   return res.json()
 }

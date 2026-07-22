@@ -9,12 +9,14 @@
 
 ```
 Kullanıcı (browser)
-    │  PDF yükle / soru sor / ticker seç
+    │  PDF yükle / soru sor / ticker seç / karşılaştır
     ▼
-React Frontend (Vite, port 5173)
+React Frontend (Vite, port 5173, react-router-dom)
     │  POST /api/upload/sync
     │  POST /api/ask
     │  POST /api/fetch-data
+    │  GET  /api/compare/metrics
+    │  POST /api/compare/ask
     ▼
 FastAPI Backend (Uvicorn, port 8000)
     │
@@ -29,13 +31,14 @@ FastAPI Backend (Uvicorn, port 8000)
         PLANNER NODE (Claude Haiku)
             Sohbet geçmişini okur
             Soruyu standalone hale getirir
-            Alt görevler üretir: [{query, type: "sql"|"vector"|"news"}]
+            Alt görevler üretir: [{query, type, ticker?}]
+            Çoklu ticker → PLANNER_PROMPT_MULTI (her ticker için ayrı sub_task)
             │
             ▼
-        ROUTER NODE (asyncio.gather)
-            ├── type="sql"    → SQL Retriever → SQLite
+        ROUTER NODE (asyncio.gather + 30s timeout/task)
+            ├── type="sql"    → SQL Retriever → SQLite (per-task ticker)
             │                    └── boş dönerse → auto-fetch (yfinance) → tekrar sorgula
-            ├── type="vector" → Vector Retriever → Qdrant
+            ├── type="vector" → Vector Retriever → Qdrant (15s timeout)
             └── type="news"   → News Retriever → SQLite (news_articles)
             │
             ▼
@@ -48,6 +51,7 @@ FastAPI Backend (Uvicorn, port 8000)
         SYNTHESIZER NODE (Claude Sonnet 4.6)
             Max 12 kaynak (skora göre sıralı)
             Türkçe, kaynaklı cevap
+            Çoklu ticker → SYSTEM_PROMPT_COMPARE (karşılaştırmalı analiz)
             "Bu bilgi yatırım tavsiyesi değildir."
             │
             ▼
@@ -64,9 +68,10 @@ FastAPI Backend (Uvicorn, port 8000)
 class AgentState(TypedDict):
     question: str                              # Kullanıcının orijinal sorusu
     ticker: str                                # Hisse kodu (ör. THYAO)
+    tickers: list[str]                         # Çoklu karşılaştırma için ticker listesi
     conversation_history: list[dict]           # Önceki mesajlar (son 6)
     standalone_question: str                   # Planner'ın rewrite ettiği soru
-    sub_tasks: list[dict]                      # [{"query": "...", "type": "sql"|"vector"}]
+    sub_tasks: list[dict]                      # [{"query": "...", "type": "sql"|"vector", "ticker"?: "..."}]
     retrieved: Annotated[list[dict], operator.add]  # Birikimli retriever sonuçları
     critic_feedback: str                       # "SUFFICIENT" veya "INSUFFICIENT: ..."
     retry_count: int                           # Kaç kez retry yapıldı (max 3)
@@ -91,10 +96,10 @@ critic_node ──── "retry" ──→ planner_node
 
 | Node | Model | Görev |
 |---|---|---|
-| Planner | Claude Haiku 4.5 | Sohbet geçmişini dikkate alarak soruyu rewrite et, sql/vector/news sub_task'lar üret |
-| Router | — | asyncio.gather ile paralel retriever çağrısı, duplicate filtreleme, auto-fetch |
+| Planner | Claude Haiku 4.5 | Soruyu rewrite et, sub_task üret. Çoklu ticker → her ticker için ayrı sub_task (ticker alanı dahil) |
+| Router | — | asyncio.gather + 30s timeout/task, per-task ticker desteği, duplicate filtreleme, auto-fetch |
 | Critic | Claude Haiku 4.5 | Toplanan bilginin yeterliliğini değerlendir |
-| Synthesizer | Claude Sonnet 4.6 | Max 12 kaynak, Türkçe, kaynaklı yanıt |
+| Synthesizer | Claude Sonnet 4.6 | Max 12 kaynak, Türkçe, kaynaklı yanıt. Çoklu ticker → karşılaştırmalı analiz prompt'u |
 
 ---
 
@@ -138,13 +143,18 @@ Router'da SQL retriever boş sonuç döndüğünde:
 
 ```python
 # router_node.py — run_task() içinde
+task_ticker = task.get("ticker", state["ticker"])  # per-task ticker desteği
 if task_type == "sql":
-    results = await asyncio.to_thread(sql_search, query, state["ticker"])
+    results = await asyncio.to_thread(sql_search, query, task_ticker)
     if not results:
         from src.ingestion.bist_finance_client import fetch_and_store
-        await asyncio.to_thread(fetch_and_store, state["ticker"])
-        results = await asyncio.to_thread(sql_search, query, state["ticker"])
+        await asyncio.to_thread(fetch_and_store, task_ticker)
+        results = await asyncio.to_thread(sql_search, query, task_ticker)
     return results
+
+# Her task 30s timeout ile sarılır — takılırsa atlanır
+async def run_task_with_timeout(task):
+    return await asyncio.wait_for(run_task(task), timeout=30)
 ```
 
 ### Vector Retriever (`src/retrievers/vector_retriever.py`)
@@ -243,6 +253,8 @@ yf.Ticker("THYAO.IS")
 | POST | `/api/upload/sync` | PDF yükle ve indexle (senkron, frontend kullanır) |
 | POST | `/api/ask` | Soru sor, LangGraph agent yanıtını bekle |
 | POST | `/api/fetch-data` | yfinance verisini çek ve SQLite'a yaz |
+| GET | `/api/compare/metrics` | 2 ticker için metrik karşılaştırması (her çağrıda yfinance auto-fetch) |
+| POST | `/api/compare/ask` | Karşılaştırma chat sorusu (multi-ticker agent) |
 
 ### `/api/ask` Request / Response
 
@@ -264,6 +276,55 @@ class AskRequest(BaseModel):
 }
 ```
 
+### `/api/compare/metrics` Request / Response
+
+```python
+# Request: GET /api/compare/metrics?tickers=THYAO,TUPRS
+
+# Response
+{
+    "tickers": ["THYAO", "TUPRS"],
+    "metrics": {
+        "THYAO": {
+            "current_price": 329.50,
+            "market_cap": 454000000000,
+            "pe_ratio": 8.5,
+            "pb_ratio": 1.2,
+            "net_margin": 12.08,
+            "roe": 0.35,
+            "roa": 0.08,
+            "debt_to_equity": 2.1,
+            "dividend_yield": 2.57,
+            "revenue": 250000000000,
+            "net_income": 30000000000,
+            "ebitda": 55000000000,
+            ...
+        },
+        "TUPRS": { ... }
+    }
+}
+```
+
+### `/api/compare/ask` Request / Response
+
+```python
+# Request
+class CompareAskRequest(BaseModel):
+    question: str
+    tickers: list[str]                        # ["GARAN", "AKBNK"]
+    conversation_history: list[dict] = []
+
+# Response
+{
+    "answer": str,                           # Karşılaştırmalı Türkçe yanıt
+    "tickers": list[str],
+    "sub_tasks": list[dict],                 # [{"query": "...", "type": "sql", "ticker": "GARAN"}, ...]
+    "retrieved_count": int,
+    "retry_count": int,
+    "critic_feedback": str
+}
+```
+
 ---
 
 ## 6. React Frontend
@@ -271,16 +332,27 @@ class AskRequest(BaseModel):
 ### Bileşen Hiyerarşisi
 
 ```
-App.tsx
-├── Sidebar.tsx                 # Konuşma geçmişi + yeni sohbet
-│   └── [Conversation listesi]
-└── Ana Alan
-    ├── Header (chat modunda)   # Logo + ticker dropdown
-    ├── [Boş durum]             # Logo + öneri sorular + ChatInput
-    └── [Chat durumu]
-        ├── Message.tsx (×N)    # Kullanıcı / assistant mesajları
-        ├── ThinkingIndicator   # 4 aşamalı animasyon (loading)
-        └── ChatInput.tsx       # Soru girişi + PDF upload + fetch data
+main.tsx (BrowserRouter)
+└── App.tsx (Layout shell + Routes)
+    ├── Sidebar.tsx                 # Sohbet/Karşılaştır navigasyonu + konuşma listesi
+    │   ├── [Navigasyon tabları]    # useNavigate + useLocation
+    │   └── [Conversation listesi]
+    └── Ana Alan (Routes)
+        ├── Route "/" → ChatPage.tsx
+        │   ├── Header (chat modunda)   # Logo + ticker dropdown
+        │   ├── [Boş durum]             # Logo + öneri sorular + ChatInput
+        │   └── [Chat durumu]
+        │       ├── Message.tsx (×N)
+        │       ├── ThinkingIndicator
+        │       └── ChatInput.tsx
+        └── Route "/compare" → ComparePage.tsx
+            ├── Header              # Logo + "Karşılaştırma" etiketi
+            ├── TickerSelector.tsx   # Multi-select (2 ticker, badge + dropdown)
+            ├── ComparisonTable.tsx  # Metrik tablosu (12 satır × N kolon)
+            └── ComparisonChat.tsx   # Karşılaştırma Q&A (ephemeral)
+                ├── Message.tsx (×N)
+                ├── ThinkingIndicator
+                └── Input bar (ticker badge'leri + textarea + send)
 ```
 
 ### State Yönetimi (App.tsx)
@@ -291,6 +363,15 @@ active: Conversation | null      // Aktif konuşma
 defaultTicker: string            // Sohbet yokken seçili ticker
 loading: boolean                 // Agent yanıt bekliyor
 suggestion: string | undefined   // Öneri soru chip'i tıklandığında
+```
+
+### Shared Constants
+
+```typescript
+// frontend/src/constants/tickers.ts — tek kaynak
+export const BIST_TICKERS = ['AKBNK', 'AKSEN', ...] as const
+export type BistTicker = typeof BIST_TICKERS[number]
+// App.tsx, ChatInput.tsx ve TickerSelector.tsx bu dosyadan import eder
 ```
 
 ### Konuşma Hafızası
@@ -431,6 +512,7 @@ Payload:
 | PDF — Tablo | pdfplumber | ≥0.11.0 |
 | Backend | FastAPI + Uvicorn | ≥0.115.0 |
 | Frontend | React 18 + TypeScript | 18.3.1 + 5.5.3 |
+| Routing | react-router-dom | ^7.x |
 | Build | Vite | 5.4.8 |
 | CSS | Tailwind CSS | 3.4.13 |
 | İkonlar | lucide-react | latest |
@@ -489,7 +571,11 @@ THYAO  TOASO  TUPRS  VAKBN  YKBNK
 | LangSmith tracing | ✅ |
 | Router duplicate önleme | ✅ |
 | BIST-30 ticker desteği | ✅ |
-| Çoklu şirket karşılaştırma | ❌ Planlandı |
+| Çoklu şirket karşılaştırma (2 ticker, metrik tablo + chat) | ✅ |
+| React Router (/, /compare) | ✅ |
+| Sidebar navigasyonu (Sohbet/Karşılaştır) | ✅ |
+| Shared constants (BIST_TICKERS tek kaynak) | ✅ |
+| Router task timeout (30s) + Qdrant timeout (15s) | ✅ |
 | Otomatik screening/alert | ❌ Planlandı |
 | Portföy analizi | ❌ Planlandı |
 | Auth + kullanıcı kotası | ❌ Planlandı |
@@ -499,11 +585,10 @@ THYAO  TOASO  TUPRS  VAKBN  YKBNK
 
 ## 12. Sonraki Adımlar
 
-1. **Çoklu Şirket Karşılaştırma** — Multi-ticker desteği, cross-ticker SQL sorguları
-2. **Otomatik Screening/Alert** — Kriter bazlı hisse taraması, bildirim
-3. **Zaman Serisi Takibi** — Watchlist, temettü/fiyat bildirimi
-4. **Portföy Analizi** — Portföy yükleme, sektör dağılımı, risk analizi
-5. **KAP Entegrasyonu** — Özel durum açıklamaları, endeks değişiklikleri
-6. **Auth** — Supabase ile kullanıcı girişi, aylık sorgu kotası
-7. **Deployment** — Railway (backend) + Vercel (frontend)
-8. **Eval sistemi** — 30 BIST sorusu ile doğruluk metrikleri
+1. **Otomatik Screening/Alert** — Kriter bazlı hisse taraması, bildirim
+2. **Zaman Serisi Takibi** — Watchlist, temettü/fiyat bildirimi
+3. **Portföy Analizi** — Portföy yükleme, sektör dağılımı, risk analizi
+4. **KAP Entegrasyonu** — Özel durum açıklamaları, endeks değişiklikleri
+5. **Auth** — Supabase ile kullanıcı girişi, aylık sorgu kotası
+6. **Deployment** — Railway (backend) + Vercel (frontend)
+7. **Eval sistemi** — 30 BIST sorusu ile doğruluk metrikleri

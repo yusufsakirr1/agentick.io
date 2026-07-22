@@ -42,20 +42,21 @@ agentick.io/
 │   │   ├── upload.py           # POST /api/upload
 │   │   ├── query.py            # POST /api/ask
 │   │   ├── fetch_data.py       # POST /api/fetch-data
-│   │   └── fetch_news.py       # POST /api/fetch-news
+│   │   ├── fetch_news.py       # POST /api/fetch-news
+│   │   └── compare.py          # GET /api/compare/metrics, POST /api/compare/ask
 │   └── services/
 │       └── pdf_pipeline.py     # PDF → SQLite + Qdrant
 ├── src/
 │   ├── agent/
-│   │   ├── state.py
-│   │   ├── planner_node.py
-│   │   ├── router_node.py      # Auto-fetch mekanizması burada
+│   │   ├── state.py            # AgentState (tickers alanı dahil)
+│   │   ├── planner_node.py     # Tek + çoklu ticker prompt'ları
+│   │   ├── router_node.py      # Auto-fetch + per-task ticker + timeout
 │   │   ├── critic_node.py
-│   │   ├── synthesizer_node.py
-│   │   └── graph.py
+│   │   ├── synthesizer_node.py # Tek + karşılaştırma prompt'ları
+│   │   └── graph.py            # run_agent(question, ticker, history, tickers)
 │   ├── retrievers/
 │   │   ├── sql_retriever.py    # Text-to-SQL (SQLite)
-│   │   ├── vector_retriever.py # Qdrant semantic search
+│   │   ├── vector_retriever.py # Qdrant semantic search (15s timeout)
 │   │   └── news_retriever.py   # Haber arama
 │   └── ingestion/
 │       ├── bist_finance_client.py  # yfinance → SQLite (temettü dahil)
@@ -64,9 +65,25 @@ agentick.io/
 │       └── build_vector_index.py   # chunks → Qdrant
 ├── frontend/
 │   └── src/
-│       ├── App.tsx
+│       ├── main.tsx            # BrowserRouter sarma
+│       ├── App.tsx             # Layout shell + Routes
+│       ├── constants/
+│       │   └── tickers.ts      # BIST-30 tek kaynak
+│       ├── pages/
+│       │   ├── ChatPage.tsx    # Sohbet sayfası
+│       │   └── ComparePage.tsx # Karşılaştırma sayfası
 │       ├── components/
+│       │   ├── Sidebar.tsx     # Sohbet/Karşılaştır navigasyonu
+│       │   ├── ChatInput.tsx
+│       │   ├── Message.tsx
+│       │   ├── ThinkingIndicator.tsx
+│       │   ├── TickerSelector.tsx    # Multi-select ticker seçici
+│       │   ├── ComparisonTable.tsx   # Metrik tablosu
+│       │   └── ComparisonChat.tsx    # Karşılaştırma Q&A
+│       ├── api/
+│       │   └── client.ts       # fetchComparisonMetrics, askCompareQuestion dahil
 │       └── services/
+│           └── conversationStorage.ts
 ├── data/
 │   ├── raw/                    # Yüklenen PDF'ler
 │   └── bist_financials.db      # SQLite
@@ -84,10 +101,11 @@ agentick.io/
 | 2 | SQL Retriever (yfinance + SQLite + text-to-SQL) | ✅ |
 | 3 | LangGraph Agent + FastAPI + React Frontend | ✅ |
 | 3.5 | Haber Retriever + Temettü + Auto-fetch | ✅ |
+| 4 | Çoklu Şirket Karşılaştırma | ✅ |
 
 ---
 
-## Son Durum (Faz 3.5 sonrası)
+## Son Durum (Faz 4 sonrası)
 
 ### Çalışan Özellikler
 - LangGraph agent: Planner → Router → Critic → Synthesizer döngüsü
@@ -99,6 +117,11 @@ agentick.io/
 - Sohbet hafızası (localStorage + API)
 - BIST-30 tam destek
 - LangSmith tracing
+- **Çoklu şirket karşılaştırma:** `/compare` sayfasında 2 hisseyi yan yana karşılaştırma
+- **Metrik tablosu:** Fiyat, F/K, PD/DD, net marj, ROE, ROA, temettü verimi, gelir, net kâr vb. — LLM gerektirmeyen doğrudan SQLite sorgusu
+- **Karşılaştırma chat:** Seçili hisseler hakkında serbest soru-cevap (multi-ticker agent)
+- **React Router:** `/` (sohbet) ve `/compare` (karşılaştırma) sayfaları
+- **Sidebar navigasyonu:** Sohbet / Karşılaştır sekmeli geçiş
 
 ### API Endpoint'leri
 
@@ -108,6 +131,8 @@ agentick.io/
 | POST | `/api/ask` | Soru sor, agent yanıtını al |
 | POST | `/api/fetch-data` | yfinance verisini SQLite'a çek |
 | POST | `/api/fetch-news` | Haber verilerini çek |
+| GET | `/api/compare/metrics` | 2 ticker için metrik karşılaştırması (yfinance auto-fetch dahil) |
+| POST | `/api/compare/ask` | Karşılaştırma sorusu sor (multi-ticker agent) |
 | GET | `/api/health` | Sağlık kontrolü |
 
 ---
@@ -116,15 +141,7 @@ agentick.io/
 
 Aşağıdaki özellikler sistemin ChatGPT'ye PDF yüklemekten **gerçek farkını** ortaya koyacak ve monetize edilebilir hale getirecek geliştirmelerdir.
 
-### 1. Çoklu Şirket Karşılaştırma
-Tek seferde birden fazla hisseyi karşılaştırabilme. Örnek sorular:
-- "TUPRS vs PETKM vs ASELS son 3 yıl kârlılık karşılaştırması"
-- "BIST-30'da en yüksek temettü verimi veren 5 hisse"
-- "THYAO ve PGSUS'un borç/özkaynak oranlarını karşılaştır"
-
-**Gerekli:** Router'ın multi-ticker desteği, SQL retriever'da cross-ticker JOIN sorguları.
-
-### 2. Otomatik Screening ve Alert
+### 1. Otomatik Screening ve Alert
 Kullanıcının belirlediği kriterlere göre hisse taraması ve bildirim. Örnek:
 - "Temettü verimi %5 üzeri, borç/özkaynak %50 altı BIST hisseleri bul"
 - "P/E oranı 10'un altındaki hisseler"
@@ -167,4 +184,4 @@ ChatGPT genel amaçlı — agentick BIST'e özel. Fark yaratan özellikler:
 
 ## Devam Edilecek Yer
 
-Gelecek çalışmalar listesinden **Çoklu Şirket Karşılaştırma** en düşük eforla en yüksek değeri verecek özellik. Router'a multi-ticker desteği eklemek ve tüm BIST-30 için periyodik veri çekmekle başlanabilir.
+Çoklu şirket karşılaştırma tamamlandı. Sıradaki en yüksek değerli özellik **Otomatik Screening** — tüm BIST-30 için periyodik veri çekme ve kullanıcının belirlediği kriterlere göre hisse taraması. Ardından **Auth + Deployment** ile ürünleştirme yapılabilir.

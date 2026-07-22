@@ -521,9 +521,248 @@ Agent 504 sayfalık rapordan doğru sayfa referanslarıyla bilgi çekiyor, bulam
 
 ---
 
-### Sıradaki — Faz 4
+---
 
-- [ ] Çoklu şirket karşılaştırma (multi-ticker)
+## 2026-07-22 — Salı
+**Faz: Faz 4 / Gün 1 — Çoklu Şirket Karşılaştırma: Backend + Agent + Frontend Altyapı**
+
+Bu oturumda çoklu şirket karşılaştırma özelliğinin backend ve agent tarafı tamamlandı, frontend altyapısı (React Router, sayfa ayrımı, navigasyon) kuruldu.
+
+---
+
+### Adım 1 — Shared Constants: BIST Ticker Listesi
+
+**Sorun:** BIST-30 ticker listesi 3 yerde duplicate edilmişti (App.tsx, ChatInput.tsx, backend SQL prompt).
+
+**Çözüm:**
+- `frontend/src/constants/tickers.ts` oluşturuldu: `BIST_TICKERS` sabiti ve `BistTicker` tipi
+- `App.tsx` ve `ChatInput.tsx`'teki inline diziler kaldırılıp import eklendi
+
+---
+
+### Adım 2 — Backend: Metrik Karşılaştırma Endpoint'i
+
+`backend/routes/compare.py` oluşturuldu:
+
+**GET `/api/compare/metrics?tickers=THYAO,TUPRS`**
+- 2 ticker alır
+- Her çağrıda yfinance'den güncel veri çeker (fiyat, oranlar vb. her gün değişiyor)
+- 4 SQL sorgusu: ratios, income_statement, balance_sheet, dividends
+- Her ticker için en son dönem verisini döndürür
+- LLM gerektirmeyen, doğrudan SQLite sorgusu — milisaniyeler içinde döner
+
+**Response yapısı:** `{ tickers: [...], metrics: { THYAO: { pe_ratio, net_margin, ... }, TUPRS: {...} } }`
+
+`backend/main.py`'ye `compare_router` kaydedildi.
+
+---
+
+### Adım 3 — Multi-Ticker Agent Desteği
+
+Mevcut LangGraph agent'ın çoklu ticker ile çalışması sağlandı:
+
+**`src/agent/state.py`:**
+- `tickers: list[str]` alanı eklendi (mevcut `ticker: str` korundu, geriye uyumluluk)
+
+**`src/agent/graph.py`:**
+- `run_agent()` fonksiyonuna `tickers: list[str] | None = None` parametresi eklendi
+- `initial_state`'e `tickers` alanı eklendi: `tickers or [ticker.upper()]`
+
+**`src/agent/planner_node.py`:**
+- `PLANNER_PROMPT_MULTI` eklendi: "Karşılaştırılacak şirketler: {tickers}", her ticker için ayrı sub_task üretme talimatı
+- Sub-task formatına `ticker` alanı eklendi: `{"query": "...", "type": "sql", "ticker": "THYAO"}`
+- `planner_node()` içinde `len(tickers) > 1` kontrolü → uygun prompt seçimi
+- Çoklu ticker için `max_tokens` 512'den 1024'e çıkarıldı
+
+**`src/agent/router_node.py`:**
+- Per-task ticker desteği: `task_ticker = task.get("ticker", state["ticker"])`
+- SQL, vector ve news çağrılarında `state["ticker"]` yerine `task_ticker` kullanıldı
+- Auto-fetch de `task_ticker` için tetikleniyor
+
+**`src/agent/synthesizer_node.py`:**
+- `SYSTEM_PROMPT_COMPARE` eklendi: karşılaştırmalı analiz formatı, güçlü/zayıf yön talimatı
+- `synthesizer_node()` içinde `len(tickers) > 1` → uygun prompt ve max_tokens (2500) seçimi
+
+---
+
+### Adım 4 — Karşılaştırma Chat Endpoint'i
+
+`backend/routes/compare.py`'ye eklendi:
+
+**POST `/api/compare/ask`**
+- `{question, tickers: ["GARAN","AKBNK"], conversation_history}` alır
+- `run_agent(question, tickers[0], history, tickers=tickers)` çağırır
+- try/except ile agent hatalarını yakalar
+
+---
+
+### Adım 5 — React Router Kurulumu
+
+**Install:** `npm install react-router-dom`
+
+**`frontend/src/main.tsx`:**
+- `<BrowserRouter>` ile `<App />` sarıldı
+
+**`frontend/src/App.tsx`:**
+- Chat UI kodu `ChatPage.tsx`'e taşındı
+- App.tsx sadece layout shell + Routes oldu:
+  - `Route path="/"` → `<ChatPage />`
+  - `Route path="/compare"` → `<ComparePage />`
+- Conversation state ve handler'lar App.tsx'te kaldı, ChatPage'e prop olarak geçildi
+
+**`frontend/src/pages/ChatPage.tsx`:**
+- App.tsx'ten çıkarılan header + empty state + chat + ChatInput kodu
+
+---
+
+### Adım 6 — Sidebar Navigasyonu
+
+`frontend/src/components/Sidebar.tsx` güncellendi:
+
+- "Yeni Sohbet" butonunun altına 2 tab'lık navigasyon eklendi: `[Sohbet] [Karşılaştır]`
+- `useNavigate()` ve `useLocation()` ile aktif sayfa tespiti
+- Sohbet: `MessageCirclePlus` ikonu, `/` route
+- Karşılaştır: `GitCompareArrows` ikonu, `/compare` route
+- Aktif tab: beyaz arka plan + gölge, inaktif: gri
+- Konuşma listesinden tıklayınca otomatik `/` route'una geçiş
+
+---
+
+### Adım 7 — API Client Güncellemesi
+
+`frontend/src/api/client.ts`'e eklendi:
+
+- `fetchComparisonMetrics(tickers: string[])` → `GET /api/compare/metrics`
+- `askCompareQuestion(question, tickers, history)` → `POST /api/compare/ask`
+- Yeni interface'ler: `TickerMetrics`, `ComparisonMetrics`, `CompareAskResult`
+
+---
+
+### Faz 4 / Gün 1 Çıktıları
+
+- ✅ Backend metrics endpoint çalışıyor (yfinance auto-fetch dahil)
+- ✅ Multi-ticker agent çalışıyor (per-task ticker, karşılaştırma prompt'ları)
+- ✅ React Router kuruldu (/, /compare)
+- ✅ Sidebar navigasyonu çalışıyor
+- ✅ Mevcut sohbet regresyon yok — `/` route'unda eskisi gibi çalışıyor
+- ✅ TypeScript build hatasız geçiyor
+
+---
+
+## 2026-07-23 — Çarşamba
+**Faz: Faz 4 / Gün 2 — Karşılaştırma UI Bileşenleri + Hata Düzeltmeleri → FAZ 4 TAMAMLANDI ✅**
+
+Bu oturumda karşılaştırma sayfasının tüm frontend bileşenleri yazıldı, performans ve hata sorunları çözüldü.
+
+---
+
+### Adım 1 — TickerSelector Bileşeni
+
+`frontend/src/components/TickerSelector.tsx` oluşturuldu:
+
+- Seçili ticker'lar siyah badge olarak görünür (× ile kaldırma)
+- "+ Ekle" butonu → dropdown açılır, BIST-30'dan seçim
+- 2 ticker sınırı (şimdilik)
+- Herhangi bir ticker kaldırılıp yerine başkası eklenebilir
+- Dışarı tıklayınca dropdown kapanır
+
+---
+
+### Adım 2 — ComparisonTable Bileşeni
+
+`frontend/src/components/ComparisonTable.tsx` oluşturuldu:
+
+- 12 metrik satırı: Fiyat, Piyasa Değeri, F/K, PD/DD, Net Marj, ROE, ROA, Borç/Özkaynak, Temettü Verimi, Gelir, Net Kâr, FAVÖK
+- Her ticker bir kolon
+- Büyük sayılar formatlanır: "1.2 T TL", "450 Mrd TL", "120 Mn TL"
+- Loading skeleton animasyonu
+- `hover:bg-gray-50` satır efekti
+
+---
+
+### Adım 3 — ComparisonChat Bileşeni
+
+`frontend/src/components/ComparisonChat.tsx` oluşturuldu:
+
+- Mevcut `Message.tsx` ve `ThinkingIndicator.tsx` yeniden kullanıldı
+- Input bar: seçili ticker badge'leri (read-only) + textarea + send butonu
+- Ticker değişince chat sıfırlanır (ephemeral — localStorage'a kaydetmez)
+- Backend error alanını kontrol eder
+
+---
+
+### Adım 4 — ComparePage Orchestrator
+
+`frontend/src/pages/ComparePage.tsx` oluşturuldu:
+
+- Orchestrator bileşen: Header → TickerSelector → ComparisonTable → ComparisonChat
+- Varsayılan ticker'lar: THYAO, TUPRS (değiştirilebilir)
+- `useEffect` → `fetchComparisonMetrics(tickers)` her ticker değişiminde
+- Hata durumu göstergesi
+
+---
+
+### Adım 5 — Qdrant Timeout ve Router Task Timeout
+
+**Sorun:** Karşılaştırma chat sorgusu gönderildiğinde agent takılıyordu — Qdrant cloud'a bağlantı timeout olmadan asılıyordu.
+
+**Çözüm:**
+- `src/retrievers/vector_retriever.py` → `QdrantClient` oluşturulurken `timeout=15` eklendi
+- `src/agent/router_node.py` → her retriever task'ı `asyncio.wait_for(timeout=30)` ile sarıldı
+- Timeout olan task atlanır, agent SQL ve news sonuçlarıyla devam eder
+- Agent artık takılma riski olmadan çalışıyor
+
+---
+
+### Adım 6 — Metrikler Her Zaman Güncel Çekilmesi
+
+**Sorun:** `/api/compare/metrics` sadece veritabanında verisi olmayan ticker'lar için yfinance çekiyordu. Ama fiyat ve oranlar her gün değişiyor.
+
+**Çözüm:** `compare_metrics` endpoint'i her çağrıda tüm ticker'lar için `fetch_and_store()` çağırır. Kullanıcı her zaman güncel veri görür.
+
+---
+
+### Adım 7 — End-to-End Test
+
+GARAN vs AKBNK karşılaştırma testi başarılı:
+
+```
+Soru: "Hangi bankanın net marjı daha yüksek?"
+Yanıt: 4 yıllık net marj karşılaştırması + güçlü/zayıf yön analizi
+Sub-tasks: 6 adet (her ticker için sql + vector + news)
+Retrieved: 5 kaynak
+Retry: 0 (ilk turda SUFFICIENT)
+```
+
+---
+
+### Çözülen Sorunlar
+
+| Sorun | Çözüm |
+|---|---|
+| BIST ticker listesi 3 yerde duplicate | `constants/tickers.ts` tek kaynak |
+| Qdrant bağlantısı timeout olmadan asılıyordu | `QdrantClient(timeout=15)` eklendi |
+| Router task'ları sonsuza kadar bekleyebiliyordu | `asyncio.wait_for(timeout=30)` eklendi |
+| Metrikler stale kalabiliyordu | Her çağrıda yfinance auto-fetch |
+| Internal Server Error hata mesajı belirsizdi | Backend'de try/except, frontend'de error kontrolü |
+| Seçili ticker'lar değiştirilemiyordu | X butonu her zaman görünür hale getirildi |
+
+---
+
+### Faz 4 Çıktı Kriterleri ✅
+
+- ✅ `/compare` sayfasında 2 hisseyi yan yana karşılaştırma
+- ✅ Metrik tablosu: Fiyat, F/K, PD/DD, Net Marj, ROE, ROA, FAVÖK vb.
+- ✅ Karşılaştırma chat: seçili hisseler hakkında serbest soru-cevap
+- ✅ Multi-ticker agent: her ticker için ayrı retriever çağrısı
+- ✅ Sidebar navigasyonu: Sohbet / Karşılaştır sekmeli geçiş
+- ✅ Mevcut sohbet regresyon yok
+- ✅ TypeScript + Vite build hatasız
+
+---
+
+### Sıradaki — Faz 5
+
 - [ ] Otomatik screening/alert
 - [ ] Zaman serisi takibi ve bildirim
 - [ ] Portföy analizi

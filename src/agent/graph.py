@@ -68,7 +68,12 @@ def _get_graph():
     return _graph
 
 
-def run_agent(question: str, ticker: str, conversation_history: list[dict] | None = None) -> dict:
+def run_agent(
+    question: str,
+    ticker: str,
+    conversation_history: list[dict] | None = None,
+    tickers: list[str] | None = None,
+) -> dict:
     """
     LangGraph agent'ı çalıştırır ve sonucu döndürür.
 
@@ -85,6 +90,7 @@ def run_agent(question: str, ticker: str, conversation_history: list[dict] | Non
     initial_state: AgentState = {
         "question": question,
         "ticker": ticker.upper(),
+        "tickers": [t.upper() for t in tickers] if tickers else [ticker.upper()],
         "conversation_history": conversation_history or [],
         "standalone_question": question,
         "sub_tasks": [],

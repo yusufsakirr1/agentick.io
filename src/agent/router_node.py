@@ -10,6 +10,8 @@ from src.retrievers.sql_retriever import search as sql_search
 from src.retrievers.vector_retriever import search as vector_search
 from src.retrievers.news_retriever import search as news_search
 
+TASK_TIMEOUT = 30  # Her retriever task'ı için maks saniye
+
 
 async def router_node(state: AgentState) -> dict:
     retry_count = state.get("retry_count", 0)
@@ -18,29 +20,40 @@ async def router_node(state: AgentState) -> dict:
     async def run_task(task: dict) -> list[dict]:
         query = task["query"]
         task_type = task["type"]
+        task_ticker = task.get("ticker", state["ticker"])  # per-task ticker desteği
         try:
             if task_type == "sql":
-                results = await asyncio.to_thread(sql_search, query, state["ticker"])
+                results = await asyncio.to_thread(sql_search, query, task_ticker)
                 # SQL boş döndüyse → yfinance'den çek, tekrar dene
                 if not results:
                     from src.ingestion.bist_finance_client import fetch_and_store
-                    print(f"  SQL boş döndü, yfinance'den çekiliyor: {state['ticker']}")
-                    await asyncio.to_thread(fetch_and_store, state["ticker"])
-                    results = await asyncio.to_thread(sql_search, query, state["ticker"])
+                    print(f"  SQL boş döndü, yfinance'den çekiliyor: {task_ticker}")
+                    await asyncio.to_thread(fetch_and_store, task_ticker)
+                    results = await asyncio.to_thread(sql_search, query, task_ticker)
                 return results
             elif task_type == "vector":
                 return await asyncio.to_thread(
-                    vector_search, query, state["ticker"], top_k
+                    vector_search, query, task_ticker, top_k
                 )
             elif task_type == "news":
                 return await asyncio.to_thread(
-                    news_search, query, state["ticker"], top_k
+                    news_search, query, task_ticker, top_k
                 )
         except Exception as e:
-            return [{"text": f"Retrieval hatası ({task_type}): {e}", "citation": "hata", "score": 0.0}]
+            print(f"  Retrieval hatası ({task_type}, {task_ticker}): {e}")
+            return []
         return []
 
-    tasks = [run_task(t) for t in state["sub_tasks"]]
+    async def run_task_with_timeout(task: dict) -> list[dict]:
+        try:
+            return await asyncio.wait_for(run_task(task), timeout=TASK_TIMEOUT)
+        except asyncio.TimeoutError:
+            task_type = task["type"]
+            task_ticker = task.get("ticker", state["ticker"])
+            print(f"  Timeout ({task_type}, {task_ticker}): {TASK_TIMEOUT}s aşıldı, atlanıyor")
+            return []
+
+    tasks = [run_task_with_timeout(t) for t in state["sub_tasks"]]
     results = await asyncio.gather(*tasks)
 
     # Daha önce eklenen chunk'ların text'lerini set'e al

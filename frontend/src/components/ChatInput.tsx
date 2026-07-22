@@ -1,15 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react'
 import { uploadPDF, fetchFinancialData } from '../api/client'
 import { RefreshCw } from 'lucide-react'
-
-const BIST_TICKERS = [
-  'AKBNK', 'AKSEN', 'ARCLK', 'ASELS', 'BIMAS',
-  'EKGYO', 'ENKAI', 'EREGL', 'FROTO', 'GARAN',
-  'GUBRF', 'HALKB', 'ISCTR', 'KCHOL', 'KONTR',
-  'KOZAL', 'KRDMD', 'ODAS',  'PETKM', 'PGSUS',
-  'SAHOL', 'SASA',  'SISE',  'TAVHL', 'TCELL',
-  'THYAO', 'TOASO', 'TUPRS', 'VAKBN', 'YKBNK',
-]
+import { BIST_TICKERS } from '../constants/tickers'
 
 type UploadStatus = 'idle' | 'uploading' | 'done' | 'error'
 
