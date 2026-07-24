@@ -3,6 +3,7 @@ import { Routes, Route } from 'react-router-dom'
 import Sidebar from './components/Sidebar'
 import ChatPage from './pages/ChatPage'
 import ComparePage from './pages/ComparePage'
+import PortfolioPage from './pages/PortfolioPage'
 import LoginPage from './pages/LoginPage'
 import { MessageData } from './components/Message'
 import { askQuestion } from './api/client'
@@ -83,6 +84,7 @@ export default function App() {
             }
           />
           <Route path="/compare" element={<ComparePage />} />
+          <Route path="/portfolio" element={<PortfolioPage />} />
         </Routes>
       </div>
     </div>

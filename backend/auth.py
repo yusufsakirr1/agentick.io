@@ -20,11 +20,18 @@ def _ensure_firebase():
     global _firebase_initialized
     if _firebase_initialized:
         return
+
+    private_key = os.getenv("FIREBASE_PRIVATE_KEY", "")
+    if not private_key:
+        # Dev mode: skip Firebase init, auth will use a mock
+        _firebase_initialized = True
+        return
+
     cred = credentials.Certificate(
         {
             "type": "service_account",
             "project_id": os.getenv("FIREBASE_PROJECT_ID", ""),
-            "private_key": os.getenv("FIREBASE_PRIVATE_KEY", "").replace("\\n", "\n"),
+            "private_key": private_key.replace("\\n", "\n"),
             "client_email": os.getenv("FIREBASE_CLIENT_EMAIL", ""),
             "token_uri": "https://oauth2.googleapis.com/token",
         }
@@ -36,6 +43,11 @@ def _ensure_firebase():
 def verify_firebase_token(token: str) -> dict:
     """Verify a Firebase ID token and return the decoded claims."""
     _ensure_firebase()
+
+    # Dev mode: Firebase not configured — accept any token
+    if not firebase_admin._apps:
+        return {"uid": "dev-user", "email": "dev@localhost"}
+
     try:
         return firebase_auth.verify_id_token(token)
     except Exception as exc:

@@ -78,11 +78,20 @@ def create_tables(conn: sqlite3.Connection) -> None:
             UNIQUE(ticker, ex_date)
         );
 
+        CREATE TABLE IF NOT EXISTS stock_splits (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker      TEXT NOT NULL,
+            split_date  TEXT NOT NULL,
+            ratio       REAL,
+            UNIQUE(ticker, split_date)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_income_ticker ON income_statement(ticker);
         CREATE INDEX IF NOT EXISTS idx_balance_ticker ON balance_sheet(ticker);
         CREATE INDEX IF NOT EXISTS idx_cf_ticker ON cash_flow(ticker);
         CREATE INDEX IF NOT EXISTS idx_ratios_ticker ON ratios(ticker);
         CREATE INDEX IF NOT EXISTS idx_div_ticker ON dividends(ticker);
+        CREATE INDEX IF NOT EXISTS idx_splits_ticker ON stock_splits(ticker);
     """)
     conn.commit()
 
@@ -193,6 +202,13 @@ def fetch_and_store(ticker: str) -> None:
     except Exception as e:
         print(f"  Nakit akış hatası: {e}")
 
+    # --- Sektör kolonu ekle (ALTER TABLE — zaten varsa pass) ---
+    try:
+        conn.execute("ALTER TABLE ratios ADD COLUMN sector TEXT")
+        conn.commit()
+    except Exception:
+        pass  # kolon zaten var
+
     # --- Oranlar: her dönem için net marj + anlık bilgiler ---
     try:
         info = yf_ticker.info
@@ -215,11 +231,12 @@ def fetch_and_store(ticker: str) -> None:
             conn.commit()
 
         # Anlık bilgileri bugünün tarihiyle ayrıca sakla
+        sector = info.get("sector") or info.get("industry") or None
         conn.execute(
             """INSERT OR REPLACE INTO ratios
                (ticker, period_date, pe_ratio, pb_ratio, net_margin,
-                roe, roa, debt_to_equity, market_cap, current_price)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                roe, roa, debt_to_equity, market_cap, current_price, sector)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 ticker,
                 today,
@@ -231,6 +248,7 @@ def fetch_and_store(ticker: str) -> None:
                 _safe(info.get("debtToEquity")),
                 _safe(info.get("marketCap")),
                 _safe(info.get("currentPrice")),
+                sector,
             ),
         )
         conn.commit()
@@ -255,6 +273,26 @@ def fetch_and_store(ticker: str) -> None:
             print(f"  Temettü: {rows} ödeme kaydedildi")
     except Exception as e:
         print(f"  Temettü hatası: {e}")
+
+    # --- Bedelsiz sermaye artırımı (stock splits) ---
+    try:
+        splits = yf_ticker.splits
+        if splits is not None and not splits.empty:
+            rows = 0
+            for date, ratio in splits.items():
+                date_str = str(date.date()) if hasattr(date, "date") else str(date)[:10]
+                r = _safe(ratio)
+                if r and r > 0.01:  # çok küçük değerleri atla
+                    conn.execute(
+                        """INSERT OR REPLACE INTO stock_splits (ticker, split_date, ratio)
+                           VALUES (?, ?, ?)""",
+                        (ticker, date_str, r),
+                    )
+                    rows += 1
+            conn.commit()
+            print(f"  Bedelsiz: {rows} işlem kaydedildi")
+    except Exception as e:
+        print(f"  Bedelsiz hatası: {e}")
 
     conn.close()
     print(f"\nTamamlandı. Veritabanı: {DB_PATH}")

@@ -41,14 +41,17 @@ Her oturuma bu dosyayı atarak nereden devam edeceğimizi belirleriz.
 agentick.io/
 ├── backend/
 │   ├── main.py
+│   ├── auth.py                 # Firebase Auth + dev mode bypass
 │   ├── routes/
 │   │   ├── upload.py           # POST /api/upload
 │   │   ├── query.py            # POST /api/ask
 │   │   ├── fetch_data.py       # POST /api/fetch-data
 │   │   ├── fetch_news.py       # POST /api/fetch-news
-│   │   └── compare.py          # GET /api/compare/metrics, POST /api/compare/ask
+│   │   ├── compare.py          # GET /api/compare/metrics, POST /api/compare/ask
+│   │   └── portfolio.py        # POST /api/portfolio/metrics, ask, news
 │   └── services/
-│       └── pdf_pipeline.py     # PDF → SQLite + Qdrant
+│       ├── pdf_pipeline.py     # PDF → SQLite + Qdrant
+│       └── metrics_utils.py    # Paylaşılan metrik helper'lar (compare + portfolio)
 ├── src/
 │   ├── agent/
 │   │   ├── state.py            # AgentState (tickers alanı dahil)
@@ -62,8 +65,8 @@ agentick.io/
 │   │   ├── vector_retriever.py # Qdrant semantic search (15s timeout)
 │   │   └── news_retriever.py   # Haber arama
 │   └── ingestion/
-│       ├── bist_finance_client.py  # yfinance → SQLite (temettü dahil)
-│       ├── news_client.py          # RSS haber çekme
+│       ├── bist_finance_client.py  # yfinance → SQLite (temettü + bedelsiz + sektör dahil)
+│       ├── news_client.py          # RSS haber çekme (AND keyword arama)
 │       ├── pdf_chunker.py          # PDF → text chunks
 │       └── build_vector_index.py   # chunks → Qdrant
 ├── frontend/
@@ -77,22 +80,32 @@ agentick.io/
 │       ├── constants/
 │       │   └── tickers.ts      # BIST-30 tek kaynak
 │       ├── pages/
-│       │   ├── LoginPage.tsx   # Landing page (9 bölüm, inline SVG mockup'lar)
-│       │   ├── ChatPage.tsx    # Sohbet sayfası
-│       │   └── ComparePage.tsx # Karşılaştırma sayfası
+│       │   ├── LoginPage.tsx       # Landing page (9 bölüm, inline SVG mockup'lar)
+│       │   ├── ChatPage.tsx        # Sohbet sayfası
+│       │   ├── ComparePage.tsx     # Karşılaştırma sayfası
+│       │   └── PortfolioPage.tsx   # Portföy dashboard sayfası
 │       ├── components/
-│       │   ├── AgentLogo.tsx   # Marka logosu (lucide MousePointerClick)
-│       │   ├── Sidebar.tsx     # Sohbet/Karşılaştır navigasyonu
+│       │   ├── AgentLogo.tsx       # Marka logosu (lucide MousePointerClick)
+│       │   ├── Sidebar.tsx         # Sohbet/Karşılaştır/Portföy navigasyonu
 │       │   ├── ChatInput.tsx
 │       │   ├── Message.tsx
 │       │   ├── ThinkingIndicator.tsx
-│       │   ├── TickerSelector.tsx    # Multi-select ticker seçici
-│       │   ├── ComparisonTable.tsx   # Metrik tablosu
-│       │   └── ComparisonChat.tsx    # Karşılaştırma Q&A
+│       │   ├── TickerSelector.tsx          # Multi-select ticker seçici
+│       │   ├── ComparisonTable.tsx         # Metrik tablosu
+│       │   ├── ComparisonChat.tsx          # Karşılaştırma Q&A
+│       │   ├── PortfolioManager.tsx        # Holding ekleme/çıkarma
+│       │   ├── PortfolioSummaryCards.tsx   # 6 özet kart (değer, K/Z, F/K, temettü)
+│       │   ├── SectorChart.tsx            # CSS bar chart (sektör dağılımı)
+│       │   ├── ConcentrationWarnings.tsx   # Konsantrasyon risk uyarıları
+│       │   ├── PortfolioHoldingsTable.tsx  # Detay tablosu (9 kolon)
+│       │   ├── DividendCalendar.tsx        # Temettü takvimi (Türkçe tarih)
+│       │   ├── PortfolioNews.tsx           # Portföy haberleri
+│       │   └── PortfolioChat.tsx           # Portföy AI soru-cevap
 │       ├── api/
-│       │   └── client.ts       # fetchComparisonMetrics, askCompareQuestion dahil
+│       │   └── client.ts       # fetchComparisonMetrics, askCompareQuestion, fetchPortfolioMetrics dahil
 │       └── services/
-│           └── conversationStorage.ts
+│           ├── conversationStorage.ts
+│           └── portfolioService.ts   # Firestore portföy CRUD
 ├── data/
 │   ├── raw/                    # Yüklenen PDF'ler
 │   └── bist_financials.db      # SQLite
@@ -112,16 +125,19 @@ agentick.io/
 | 3.5 | Haber Retriever + Temettü + Auto-fetch | ✅ |
 | 4 | Çoklu Şirket Karşılaştırma | ✅ |
 | 5 | Firebase Auth + Landing Page Yeniden Tasarım | ✅ |
+| 6 | Portföy Dashboard + Bedelsiz Sermaye Artırımı | ✅ |
 
 ---
 
-## Son Durum (Faz 5 sonrası)
+## Son Durum (Faz 6 sonrası)
 
 ### Çalışan Özellikler
 - LangGraph agent: Planner → Router → Critic → Synthesizer döngüsü
 - 3 retriever paralel: SQL + Vektör + Haber
-- 6 SQLite tablosu: income_statement, balance_sheet, cash_flow, ratios, dividends, pdf_tables
+- 8 SQLite tablosu: income_statement, balance_sheet, cash_flow, ratios, dividends, stock_splits, pdf_tables, news_articles
 - Temettü verisi (yfinance .dividends) + temettü verimi hesaplama (dividends JOIN ratios)
+- **Bedelsiz sermaye artırımı:** stock_splits tablosu (yfinance .splits), SQL Retriever şemasında tanımlı
+- **Sektör verisi:** ratios tablosunda `sector` kolonu (yfinance info.sector)
 - **Auto-fetch:** SQL boş dönünce otomatik yfinance'den çekip tekrar sorgulama
 - PDF upload → tablo çıkarma + metin indexleme + yfinance güncelleme
 - Sohbet hafızası (localStorage + API)
@@ -130,11 +146,13 @@ agentick.io/
 - **Çoklu şirket karşılaştırma:** `/compare` sayfasında 2 hisseyi yan yana karşılaştırma
 - **Metrik tablosu:** Fiyat, F/K, PD/DD, net marj, ROE, ROA, temettü verimi, gelir, net kâr vb. — LLM gerektirmeyen doğrudan SQLite sorgusu
 - **Karşılaştırma chat:** Seçili hisseler hakkında serbest soru-cevap (multi-ticker agent)
-- **React Router:** `/` (sohbet) ve `/compare` (karşılaştırma) sayfaları
-- **Sidebar navigasyonu:** Sohbet / Karşılaştır sekmeli geçiş
+- **React Router:** `/` (sohbet), `/compare` (karşılaştırma), `/portfolio` (portföy) sayfaları
+- **Sidebar navigasyonu:** Sohbet / Karşılaştır / Portföy sekmeli geçiş
 - **Firebase Auth:** Google OAuth ile giriş, AuthContext + AuthProvider pattern
 - **Landing Page:** 9 bölümlük profesyonel SaaS sayfası — Navbar, Hero (inline SVG chat mockup), Trust Strip, Nasıl Çalışır (3 adım), Özellikler (6 renkli kart), Platform Önizleme (browser frame SVG), FAQ Accordion (5 soru, useState toggle), Koyu CTA Banner, Detaylı Footer
 - **Auth Guard:** `App.tsx`'te `!user` kontrolü → LoginPage gösterimi, giriş sonrası otomatik yönlendirme
+- **Portföy Dashboard:** Firestore'da portföy saklama, per-holding metrikler, sektör dağılımı (CSS bar chart), konsantrasyon uyarıları, temettü takvimi (Türkçe tarih), portföy haberleri, AI soru-cevap
+- **Haber arama iyileştirmesi:** OR → AND keyword araması (alakasız haber önleme)
 
 ### API Endpoint'leri
 
@@ -146,6 +164,9 @@ agentick.io/
 | POST | `/api/fetch-news` | Haber verilerini çek |
 | GET | `/api/compare/metrics` | 2 ticker için metrik karşılaştırması (yfinance auto-fetch dahil) |
 | POST | `/api/compare/ask` | Karşılaştırma sorusu sor (multi-ticker agent) |
+| POST | `/api/portfolio/metrics` | Portföy metrikleri, sektör dağılımı, uyarılar, temettü takvimi |
+| POST | `/api/portfolio/ask` | Portföy hakkında AI soru-cevap (multi-ticker agent) |
+| POST | `/api/portfolio/news` | Portföy hisselerine ait haberler |
 | GET | `/api/health` | Sağlık kontrolü |
 
 ---
@@ -170,13 +191,8 @@ Hisse takibi ve önemli olay bildirimi. Örnek:
 
 **Gerekli:** Kullanıcı bazlı watchlist, background scheduler, push notification (email/webhook).
 
-### 3. Portföy Analizi
-Kullanıcının portföyünü yükleyip analiz edebilmesi. Örnek:
-- "5 hissemi yükledim, portföyümün sektör dağılımı ne?"
-- "Portföyümün toplam temettü geliri ne kadar?"
-- "Portföy risk dağılımım nasıl, çok mu yoğunlaşmış?"
-
-**Gerekli:** Portföy veri modeli, sektör/endüstri sınıflandırma, ağırlıklı metrik hesaplama.
+### ~~3. Portföy Analizi~~ ✅ Faz 6'da tamamlandı
+Portföy dashboard: Firestore'da holding CRUD, sektör dağılımı, konsantrasyon uyarıları, ağırlıklı metrikler, temettü takvimi, haber akışı, AI soru-cevap.
 
 ### 4. BIST'e Özel Domain Bilgisi ve KAP Entegrasyonu
 ChatGPT genel amaçlı — agentick BIST'e özel. Fark yaratan özellikler:
@@ -197,4 +213,4 @@ ChatGPT genel amaçlı — agentick BIST'e özel. Fark yaratan özellikler:
 
 ## Devam Edilecek Yer
 
-Auth ve landing page tamamlandı. Sıradaki en yüksek değerli özellik **Otomatik Screening** — tüm BIST-30 için periyodik veri çekme ve kullanıcının belirlediği kriterlere göre hisse taraması. Ardından **Deployment** (Railway + Vercel) ile canlıya alınabilir.
+Portföy dashboard tamamlandı. Sıradaki en yüksek değerli özellik **Otomatik Screening** — tüm BIST-30 için periyodik veri çekme ve kullanıcının belirlediği kriterlere göre hisse taraması. Ardından **Deployment** (Railway + Vercel) ile canlıya alınabilir.

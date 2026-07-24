@@ -9,7 +9,7 @@
 
 ```
 Kullanıcı (browser)
-    │  PDF yükle / soru sor / ticker seç / karşılaştır
+    │  PDF yükle / soru sor / ticker seç / karşılaştır / portföy yönet
     ▼
 React Frontend (Vite, port 5173, react-router-dom)
     │  POST /api/upload/sync
@@ -17,6 +17,9 @@ React Frontend (Vite, port 5173, react-router-dom)
     │  POST /api/fetch-data
     │  GET  /api/compare/metrics
     │  POST /api/compare/ask
+    │  POST /api/portfolio/metrics
+    │  POST /api/portfolio/ask
+    │  POST /api/portfolio/news
     ▼
 FastAPI Backend (Uvicorn, port 8000)
     │
@@ -119,8 +122,9 @@ critic_node ──── "retry" ──→ planner_node
 | `income_statement` | Gelir, brüt kâr, EBITDA, net kâr | yfinance |
 | `balance_sheet` | Varlıklar, borç, özkaynak, nakit | yfinance |
 | `cash_flow` | Operasyonel, yatırım, finansman, serbest nakit akışı | yfinance |
-| `ratios` | P/E, P/B, net marj, ROE, ROA, D/E, piyasa değeri, fiyat | yfinance |
+| `ratios` | P/E, P/B, net marj, ROE, ROA, D/E, piyasa değeri, fiyat, sektör | yfinance |
 | `dividends` | Temettü tarihi ve hisse başı tutar | yfinance |
+| `stock_splits` | Bedelsiz sermaye artırımı / hisse bölünme tarihi ve oranı | yfinance |
 | `pdf_tables` | PDF'den çıkarılan tablolar (pipe-delimited metin) | pdfplumber |
 | `news_articles` | Haber başlıkları, özetleri, kaynak ve tarih | RSS (Bloomberg HT vb.) |
 
@@ -236,8 +240,9 @@ yf.Ticker("THYAO.IS")
     ├── income_stmt → income_statement tablosu
     ├── balance_sheet → balance_sheet tablosu
     ├── cashflow → cash_flow tablosu
-    ├── info (P/E, P/B, ROE, fiyat...) → ratios tablosu
-    └── dividends → dividends tablosu
+    ├── info (P/E, P/B, ROE, fiyat, sektör...) → ratios tablosu (sector kolonu dahil)
+    ├── dividends → dividends tablosu
+    └── splits → stock_splits tablosu (bedelsiz sermaye artırımı)
 ```
 
 ---
@@ -255,6 +260,9 @@ yf.Ticker("THYAO.IS")
 | POST | `/api/fetch-data` | yfinance verisini çek ve SQLite'a yaz |
 | GET | `/api/compare/metrics` | 2 ticker için metrik karşılaştırması (her çağrıda yfinance auto-fetch) |
 | POST | `/api/compare/ask` | Karşılaştırma chat sorusu (multi-ticker agent) |
+| POST | `/api/portfolio/metrics` | Portföy metrikleri: per-holding K/Z, sektör dağılımı, uyarılar, temettü takvimi |
+| POST | `/api/portfolio/ask` | Portföy AI soru-cevap (multi-ticker agent) |
+| POST | `/api/portfolio/news` | Portföy hisselerine ait haberler (ticker tag + keyword AND arama) |
 
 ### `/api/ask` Request / Response
 
@@ -325,6 +333,78 @@ class CompareAskRequest(BaseModel):
 }
 ```
 
+### `/api/portfolio/metrics` Request / Response
+
+```python
+# Request
+class PortfolioMetricsRequest(BaseModel):
+    holdings: list[HoldingInput]  # [{"ticker": "THYAO", "shares": 100, "avgCost": 250.0}]
+
+# Response
+{
+    "holdings": [
+        {
+            "ticker": "THYAO",
+            "shares": 100,
+            "avgCost": 250.0,
+            "currentPrice": 329.50,
+            "marketValue": 32950.0,
+            "costBasis": 25000.0,
+            "profitLoss": 7950.0,
+            "profitLossPct": 31.8,
+            "weight": 65.2,
+            "sector": "Industrials",
+            "pe_ratio": 8.5,
+            "dividend_yield": 2.57,
+            "net_margin": 12.08
+        }
+    ],
+    "summary": {
+        "totalValue": 50500.0,
+        "totalCost": 38000.0,
+        "totalProfitLoss": 12500.0,
+        "totalProfitLossPct": 32.89,
+        "weightedPE": 9.2,
+        "weightedDividendYield": 2.1,
+        "weightedNetMargin": 10.5
+    },
+    "sectorAllocation": [
+        {"sector": "Industrials", "weight": 65.2, "tickers": ["THYAO"]}
+    ],
+    "warnings": ["THYAO portföyün %65.2'ini oluşturuyor (>%30)"],
+    "dividends": [
+        {"ticker": "THYAO", "ex_date": "2025-09-02", "amount": 1.50}
+    ]
+}
+```
+
+### `/api/portfolio/ask` — `/api/compare/ask` ile aynı format
+
+### `/api/portfolio/news` Request / Response
+
+```python
+# Request
+class PortfolioNewsRequest(BaseModel):
+    tickers: list[str]  # ["THYAO", "TUPRS"]
+
+# Response
+{
+    "tickers": ["THYAO", "TUPRS"],
+    "count": 8,
+    "articles": [
+        {
+            "source": "Bloomberg HT",
+            "title": "THY yolcu sayısı rekoru...",
+            "link": "https://...",
+            "summary": "...",
+            "published_at": "2026-07-24 10:30:00",
+            "tickers": "THYAO,TAVHL",
+            "ticker": "THYAO"
+        }
+    ]
+}
+```
+
 ---
 
 ## 6. React Frontend
@@ -347,7 +427,7 @@ main.tsx (BrowserRouter + AuthProvider)
     │   └── Footer (3 sütun: logo+açıklama | ürün linkleri | iletişim, © 2026)
     │
     └── [user] → Layout shell (Sidebar + Routes)
-        ├── Sidebar.tsx                 # Sohbet/Karşılaştır navigasyonu + konuşma listesi
+        ├── Sidebar.tsx                 # Sohbet/Karşılaştır/Portföy navigasyonu + konuşma listesi
         │   ├── [Navigasyon tabları]    # useNavigate + useLocation
         │   └── [Conversation listesi]
         └── Ana Alan (Routes)
@@ -358,11 +438,23 @@ main.tsx (BrowserRouter + AuthProvider)
             │       ├── Message.tsx (×N)
             │       ├── ThinkingIndicator
             │       └── ChatInput.tsx
-            └── Route "/compare" → ComparePage.tsx
-                ├── Header              # Logo + "Karşılaştırma" etiketi
-                ├── TickerSelector.tsx   # Multi-select (2 ticker, badge + dropdown)
-                ├── ComparisonTable.tsx  # Metrik tablosu (12 satır × N kolon)
-                └── ComparisonChat.tsx   # Karşılaştırma Q&A (ephemeral)
+            ├── Route "/compare" → ComparePage.tsx
+            │   ├── Header              # Logo + "Karşılaştırma" etiketi
+            │   ├── TickerSelector.tsx   # Multi-select (2 ticker, badge + dropdown)
+            │   ├── ComparisonTable.tsx  # Metrik tablosu (12 satır × N kolon)
+            │   └── ComparisonChat.tsx   # Karşılaştırma Q&A (ephemeral)
+            │       ├── Message.tsx (×N)
+            │       ├── ThinkingIndicator
+            │       └── Input bar (ticker badge'leri + textarea + send)
+            └── Route "/portfolio" → PortfolioPage.tsx
+                ├── PortfolioManager.tsx        # Holding CRUD (ticker dropdown + lot + maliyet)
+                ├── PortfolioSummaryCards.tsx   # 6 kart (Değer, Maliyet, K/Z, K/Z%, F/K, Temettü)
+                ├── ConcentrationWarnings.tsx   # Amber uyarı kartları (>%30 hisse, >%40 sektör)
+                ├── SectorChart.tsx            # CSS bar chart (8 renk paleti)
+                ├── DividendCalendar.tsx        # Temettü takvimi (Türkçe tarih formatı)
+                ├── PortfolioHoldingsTable.tsx  # 9 kolon detay tablosu
+                ├── PortfolioNews.tsx           # Portföy hisselerine ait haberler
+                └── PortfolioChat.tsx           # Portföy AI soru-cevap
                     ├── Message.tsx (×N)
                     ├── ThinkingIndicator
                     └── Input bar (ticker badge'leri + textarea + send)
@@ -490,7 +582,8 @@ CREATE TABLE ratios (
     roa REAL,
     debt_to_equity REAL,
     market_cap REAL,
-    current_price REAL          -- TRY
+    current_price REAL,         -- TRY
+    sector TEXT                 -- Sektör (yfinance info.sector)
 );
 
 CREATE TABLE dividends (
@@ -498,6 +591,13 @@ CREATE TABLE dividends (
     ticker TEXT NOT NULL,
     ex_date TEXT,               -- Temettü ödeme tarihi (YYYY-MM-DD)
     amount REAL                 -- Hisse başı temettü tutarı (TL)
+);
+
+CREATE TABLE stock_splits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    split_date TEXT,            -- Bölünme tarihi (YYYY-MM-DD)
+    ratio REAL                  -- Bölünme oranı (ör. 2.0 = %100 bedelsiz)
 );
 
 CREATE TABLE pdf_tables (
@@ -627,8 +727,12 @@ THYAO  TOASO  TUPRS  VAKBN  YKBNK
 | Firebase Auth (Google OAuth, AuthContext) | ✅ |
 | Landing Page (9 bölüm, inline SVG mockup'lar, FAQ accordion) | ✅ |
 | Auth guard (App.tsx'te user kontrolü) | ✅ |
+| Portföy dashboard (Firestore CRUD, 8 bileşen, 3 endpoint) | ✅ |
+| Sektör verisi (yfinance → ratios.sector) | ✅ |
+| Bedelsiz sermaye artırımı (stock_splits tablosu) | ✅ |
+| Haber AND keyword araması (false positive önleme) | ✅ |
+| Paylaşılan metrik helper'lar (metrics_utils.py) | ✅ |
 | Otomatik screening/alert | ❌ Planlandı |
-| Portföy analizi | ❌ Planlandı |
 | Kullanıcı kotası (Firestore) | ❌ Planlandı |
 | Deployment (Railway / Vercel) | ❌ Planlandı |
 
@@ -638,9 +742,8 @@ THYAO  TOASO  TUPRS  VAKBN  YKBNK
 
 1. **Otomatik Screening/Alert** — Kriter bazlı hisse taraması, bildirim
 2. **Zaman Serisi Takibi** — Watchlist, temettü/fiyat bildirimi
-3. **Portföy Analizi** — Portföy yükleme, sektör dağılımı, risk analizi
-4. **KAP Entegrasyonu** — Özel durum açıklamaları, endeks değişiklikleri
-5. **Deployment** — Railway (backend) + Vercel (frontend)
-6. **Kullanıcı Kotası** — Firestore ile aylık sorgu limiti
-7. **Eval sistemi** — 30 BIST sorusu ile doğruluk metrikleri
-8. **Stripe Entegrasyonu** — ₺199/ay Pro abonelik
+3. **KAP Entegrasyonu** — Özel durum açıklamaları, endeks değişiklikleri
+4. **Deployment** — Railway (backend) + Vercel (frontend)
+5. **Kullanıcı Kotası** — Firestore ile aylık sorgu limiti
+6. **Eval sistemi** — 30 BIST sorusu ile doğruluk metrikleri
+7. **Stripe Entegrasyonu** — ₺199/ay Pro abonelik

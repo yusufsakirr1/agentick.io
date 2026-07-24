@@ -1024,3 +1024,172 @@ Her soru bir kart:
 - [ ] Deployment (Railway + Vercel)
 - [ ] Custom domain (agentick.io)
 - [ ] Production environment variables
+
+---
+
+## 2026-07-24 — Perşembe
+**Faz: Faz 6 — Portföy Analiz Dashboard'u + Bedelsiz Sermaye Artırımı Verisi**
+
+Bu oturumda portföy analiz dashboard'u sıfırdan tasarlanıp uygulandı. Kullanıcı BIST hisselerinden oluşan bir portföy sepeti oluşturup AI destekli analiz yapabiliyor. Ayrıca bedelsiz sermaye artırımı (stock splits) verisi sisteme eklendi.
+
+---
+
+### Adım 1 — Firebase Firestore Kurulumu
+
+- `frontend/src/config/firebase.ts` → `getFirestore` import, `db` export
+- `frontend/src/services/portfolioService.ts` oluşturuldu:
+  - Firestore CRUD: `getPortfolio`, `addHolding`, `updateHolding`, `removeHolding`
+  - Collection yapısı: `users/{uid}/portfolios/default`
+  - Holding yapısı: `{ ticker, shares, avgCost, addedAt }`
+
+---
+
+### Adım 2 — Backend: Sektör Verisi ve Bedelsiz Sermaye Artırımı
+
+**`src/ingestion/bist_finance_client.py` güncellendi:**
+- `ratios` tablosuna `sector` kolonu eklendi (ALTER TABLE + try/except)
+- `fetch_and_store()` içinde `info.get("sector")` değeri ratios satırına yazılıyor
+- `stock_splits` tablosu oluşturuldu: `ticker`, `split_date`, `ratio`
+- `yf_ticker.splits` verisi çekilip kaydediliyor (tüm BIST hisseleri için otomatik)
+
+**Test:** SASA için 11 bedelsiz işlem başarıyla kaydedildi (2003-2024 arası).
+
+---
+
+### Adım 3 — Backend: Metrics Helper Refactor
+
+**`backend/services/metrics_utils.py` oluşturuldu:**
+- `compare.py`'den `get_conn`, `fetch_latest_ratios`, `fetch_latest_income`, `fetch_latest_balance`, `fetch_dividend_yield`, `build_ticker_metrics` fonksiyonları taşındı
+- `fetch_dividends()` eklendi (son 2 yıllık temettü verisi)
+- `build_ticker_metrics()`'e `sector` alanı eklendi
+- `compare.py` bu modülden import edecek şekilde güncellendi
+
+---
+
+### Adım 4 — Backend: Portföy Endpoint'leri
+
+**`backend/routes/portfolio.py` oluşturuldu — 3 endpoint:**
+
+**POST `/api/portfolio/metrics`:**
+- Her ticker için `fetch_and_store()` (asyncio.gather)
+- Per-holding: currentPrice, marketValue, costBasis, profitLoss, profitLossPct, weight, sector
+- Summary: totalValue, totalCost, totalProfitLoss, weightedPE, weightedDividendYield, weightedNetMargin
+- Sektör dağılımı: `[{sector, weight, tickers}]`
+- Konsantrasyon uyarıları: tek hisse >%30, tek sektör >%40
+- Temettü takvimi: son 2 yıllık temettü ödemeleri
+
+**POST `/api/portfolio/ask`:**
+- `run_agent()` çağrısı, min ticker kısıtlaması 1'e düşürüldü
+- Tek ticker ise normal agent, çoklu ise multi-ticker agent
+
+**POST `/api/portfolio/news`:**
+- Her ticker için `search_news()` çağrısı (ticker tag + şirket adı fallback)
+- Deduplicate (link bazlı), tarihe göre sırala
+- Alakasız genel haber göstermez — sadece şirketle ilgili haberler
+
+`backend/main.py`'ye `portfolio_router` kaydedildi.
+
+---
+
+### Adım 5 — Frontend: API Client Genişletmesi
+
+**`frontend/src/api/client.ts`'e eklendi:**
+- 7 yeni interface: `PortfolioHoldingInput`, `PortfolioHoldingMetrics`, `PortfolioSummary`, `SectorAllocation`, `DividendEntry`, `PortfolioMetricsResult`, `NewsArticle`
+- 3 yeni fonksiyon: `fetchPortfolioMetrics()`, `askPortfolioQuestion()`, `fetchPortfolioNews()`
+
+---
+
+### Adım 6 — Frontend: 8 Portföy Dashboard Bileşeni
+
+**`PortfolioManager.tsx`** — Holding CRUD:
+- Ticker dropdown (BIST_TICKERS, kullanılmış olanlar hariç) + shares input + avgCost input
+- Her satır: ticker badge + lot + maliyet + toplam + sil butonu
+- "Hisse Ekle" formu toggle
+
+**`PortfolioSummaryCards.tsx`** — 6 özet kart (3×2 grid):
+- Toplam Değer (Banknote ikonu), Toplam Maliyet (Target), K/Z (TrendingUp/Down)
+- K/Z Oranı (Percent), Ağırlıklı F/K (BarChart3), Ağırlıklı Temettü (Coins)
+- Yeşil/kırmızı renk kodlaması (kâr/zarar), skeleton loading
+
+**`SectorChart.tsx`** — CSS bar chart:
+- Her sektör: renkli nokta + isim + ticker'lar + yüzde + animasyonlu bar
+- 8 farklı renk paleti, maxWeight'e göre orantılı genişlik
+
+**`ConcentrationWarnings.tsx`** — Amber uyarı kartları:
+- AlertTriangle ikonu, uyarı yoksa render etmez
+
+**`PortfolioHoldingsTable.tsx`** — 9 kolonlu tablo:
+- Hisse, Lot, Maliyet, Fiyat, Değer, K/Z, K/Z%, Ağırlık, Sektör
+- Yeşil/kırmızı font renkleri, sektör badge
+
+**`DividendCalendar.tsx`** — Temettü timeline:
+- Türkçe tarih formatı ("2 Eylül 2025"), ticker badge, tutar + "/hisse" etiketi
+- Veri yoksa "Temettü verisi bulunamadı" mesajı
+
+**`PortfolioNews.tsx`** — Haber kartları:
+- Mount'ta `fetchPortfolioNews(tickers)` çağrısı
+- Kaynak badge + başlık + özet + tarih + ticker badge + link ikonu
+- Loading skeleton, error handling
+
+**`PortfolioChat.tsx`** — AI soru-cevap:
+- ComparisonChat klonu, `askPortfolioQuestion` çağrısı
+- Ticker değişince chat sıfırlanır
+- Max 5 ticker badge gösterilir, fazlası "+N"
+
+---
+
+### Adım 7 — Frontend: Sayfa ve Navigasyon
+
+**`frontend/src/pages/PortfolioPage.tsx` oluşturuldu:**
+- Dashboard layout: Portföy Sepeti → "Portföyü Analiz Et" butonu → Özet Kartlar → Uyarılar → (Sektör + Temettü) 2 kolon → Holdings Tablosu → (Haberler + Chat) 2 kolon
+- Mount'ta Firestore'dan portföy yükle, değişiklikleri Firestore'a kaydet
+- Empty state: Logo + açıklama
+
+**`frontend/src/App.tsx`** — `<Route path="/portfolio" element={<PortfolioPage />} />` eklendi
+
+**`frontend/src/components/Sidebar.tsx`** — NAV_ITEMS'a `{ label: 'Portföy', path: '/portfolio', icon: Briefcase }` eklendi
+
+---
+
+### Adım 8 — SQL Retriever: Bedelsiz Desteği
+
+**`src/retrievers/sql_retriever.py` güncellendi:**
+- `DB_SCHEMA`'ya `stock_splits` tablosu tanımı eklendi (ticker, split_date, ratio)
+- `all_tables` listesine `stock_splits` eklendi
+- Agent artık "bedelsiz sermaye artırımı" sorularını SQL'e çevirebilir
+
+---
+
+### Adım 9 — Hata Düzeltmeleri
+
+| Sorun | Çözüm |
+|---|---|
+| Backend 500 Internal Server Error (tüm endpoint'ler) | `FIREBASE_PRIVATE_KEY` boş — `auth.py`'ye dev mode bypass eklendi |
+| Portföy haberleri tüm Bloomberg haberlerini getiriyordu | `search_news` keyword araması OR → AND'e çevrildi |
+| Haber fallback'i ilgisiz genel haberleri gösteriyordu | Genel haber fallback kaldırıldı, sadece ilgili haberler |
+| Temettü tarihleri ham ISO format (2025-09-02) | Türkçe format: "2 Eylül 2025" + "/hisse" etiketi |
+| Dashboard'ta $ (dolar) ikonu vardı | `DollarSign` → `Banknote` (toplam değer) ve `Coins` (temettü) |
+
+---
+
+### Faz 6 Çıktı Kriterleri ✅
+
+- ✅ Portföy sepeti: hisse ekleme/çıkarma (Firestore'da kalıcı)
+- ✅ Özet kartlar: toplam değer, maliyet, K/Z, ağırlıklı F/K ve temettü
+- ✅ Sektör dağılımı bar chart
+- ✅ Konsantrasyon uyarıları (tek hisse >%30, tek sektör >%40)
+- ✅ Holdings detay tablosu (9 kolon, yeşil/kırmızı renk kodlaması)
+- ✅ Temettü takvimi (Türkçe tarih, hisse başı tutar)
+- ✅ Portföy haberleri (sadece ilgili haberler)
+- ✅ AI portföy asistanı (serbest soru-cevap)
+- ✅ Bedelsiz sermaye artırımı verisi (tüm hisseler için otomatik)
+- ✅ Sidebar'da Portföy sekmesi
+- ✅ TypeScript hatasız (`npx tsc --noEmit`)
+
+---
+
+### Sıradaki — Faz 7
+
+- [ ] Deployment (Railway + Vercel)
+- [ ] Custom domain (agentick.io)
+- [ ] Production environment variables

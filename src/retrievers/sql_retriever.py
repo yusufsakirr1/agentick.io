@@ -70,6 +70,11 @@ Tablo: dividends
   ex_date TEXT     -- Temettü ödeme tarihi (YYYY-MM-DD)
   amount REAL      -- Hisse başı temettü tutarı (TL)
 
+Tablo: stock_splits
+  ticker TEXT      -- Hisse kodu (ör. SASA)
+  split_date TEXT  -- Bedelsiz sermaye artırımı / hisse bölünme tarihi (YYYY-MM-DD)
+  ratio REAL       -- Bölünme oranı (ör. 2.0 = her 1 hisse 2 hisse oldu, yani %100 bedelsiz)
+
 Tablo: news_articles
   id INTEGER           -- Birincil anahtar
   source TEXT           -- Haber kaynağı (ör. Bloomberg HT)
@@ -179,7 +184,7 @@ def search(question: str, ticker: str = "THYAO", top_k: int = 5) -> list[dict]:
         return []
 
     # Hangi tablolar sorgulandı?
-    all_tables = ["income_statement", "balance_sheet", "cash_flow", "ratios", "dividends", "pdf_tables"]
+    all_tables = ["income_statement", "balance_sheet", "cash_flow", "ratios", "dividends", "stock_splits", "pdf_tables"]
     tables = [t for t in all_tables if t in sql]
     source = ", ".join(tables) if tables else "finansal tablolar"
 

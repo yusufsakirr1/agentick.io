@@ -189,12 +189,9 @@ def search_news(ticker: str | None = None, query: str = "", top_k: int = 5) -> l
 
     if query:
         keywords = query.lower().split()
-        kw_clauses = []
         for kw in keywords:
-            kw_clauses.append("(LOWER(title) LIKE ? OR LOWER(summary) LIKE ?)")
+            conditions.append("(LOWER(title) LIKE ? OR LOWER(summary) LIKE ?)")
             params.extend([f"%{kw}%", f"%{kw}%"])
-        if kw_clauses:
-            conditions.append("(" + " OR ".join(kw_clauses) + ")")
 
     where = "WHERE " + " AND ".join(conditions) if conditions else ""
     sql = f"""

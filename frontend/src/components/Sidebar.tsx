@@ -1,11 +1,12 @@
 import { useNavigate, useLocation } from 'react-router-dom'
 import AgentLogo from './AgentLogo'
-import { MessageCircle, GitCompareArrows, LogOut } from 'lucide-react'
+import { MessageCircle, GitCompareArrows, Briefcase, LogOut } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 
 const NAV_ITEMS = [
   { label: 'Sohbet', path: '/', icon: MessageCircle },
   { label: 'Karşılaştır', path: '/compare', icon: GitCompareArrows },
+  { label: 'Portföy', path: '/portfolio', icon: Briefcase },
 ]
 
 export default function Sidebar() {

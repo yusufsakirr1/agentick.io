@@ -15,6 +15,7 @@ from backend.routes.query import router as query_router
 from backend.routes.fetch_data import router as fetch_router
 from backend.routes.fetch_news import router as news_router
 from backend.routes.compare import router as compare_router
+from backend.routes.portfolio import router as portfolio_router
 
 app = FastAPI(
     title="Agentick API",
@@ -39,6 +40,7 @@ app.include_router(query_router, prefix="/api", tags=["query"])
 app.include_router(fetch_router, prefix="/api", tags=["fetch"])
 app.include_router(news_router, prefix="/api", tags=["news"])
 app.include_router(compare_router, prefix="/api", tags=["compare"])
+app.include_router(portfolio_router, prefix="/api", tags=["portfolio"])
 
 
 @app.get("/api/health")

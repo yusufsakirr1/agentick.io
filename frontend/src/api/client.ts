@@ -123,6 +123,125 @@ export async function fetchComparisonMetrics(tickers: string[]): Promise<Compari
   return res.json()
 }
 
+// ── Portfolio Types ──
+
+export interface PortfolioHoldingInput {
+  ticker: string
+  shares: number
+  avgCost: number
+}
+
+export interface PortfolioHoldingMetrics {
+  ticker: string
+  shares: number
+  avgCost: number
+  currentPrice: number
+  marketValue: number
+  costBasis: number
+  profitLoss: number
+  profitLossPct: number
+  weight: number
+  sector: string
+  pe_ratio: number | null
+  dividend_yield: number | null
+  net_margin: number | null
+}
+
+export interface PortfolioSummary {
+  totalValue: number
+  totalCost: number
+  totalProfitLoss: number
+  totalProfitLossPct: number
+  weightedPE: number | null
+  weightedDividendYield: number | null
+  weightedNetMargin: number | null
+}
+
+export interface SectorAllocation {
+  sector: string
+  weight: number
+  tickers: string[]
+}
+
+export interface DividendEntry {
+  ticker: string
+  ex_date: string
+  amount: number
+}
+
+export interface PortfolioMetricsResult {
+  holdings: PortfolioHoldingMetrics[]
+  summary: PortfolioSummary
+  sectorAllocation: SectorAllocation[]
+  warnings: string[]
+  dividends: DividendEntry[]
+  error?: string
+}
+
+export interface NewsArticle {
+  ticker: string
+  title: string
+  summary: string
+  link: string
+  source: string
+  published_at: string
+}
+
+export interface PortfolioNewsResult {
+  tickers: string[]
+  count: number
+  articles: NewsArticle[]
+  error?: string
+}
+
+// ── Portfolio API Functions ──
+
+export async function fetchPortfolioMetrics(holdings: PortfolioHoldingInput[]): Promise<PortfolioMetricsResult> {
+  const authHeaders = await getAuthHeaders()
+  const res = await fetch(`${BASE_URL}/portfolio/metrics`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders },
+    body: JSON.stringify({ holdings }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(err.detail || 'Portföy metrik hatası')
+  }
+  return res.json()
+}
+
+export async function askPortfolioQuestion(
+  question: string,
+  tickers: string[],
+  conversationHistory: Array<{ role: string; content: string }> = [],
+): Promise<CompareAskResult> {
+  const authHeaders = await getAuthHeaders()
+  const res = await fetch(`${BASE_URL}/portfolio/ask`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders },
+    body: JSON.stringify({ question, tickers, conversation_history: conversationHistory }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(err.detail || 'Portföy sorgu hatası')
+  }
+  return res.json()
+}
+
+export async function fetchPortfolioNews(tickers: string[]): Promise<PortfolioNewsResult> {
+  const authHeaders = await getAuthHeaders()
+  const res = await fetch(`${BASE_URL}/portfolio/news`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders },
+    body: JSON.stringify({ tickers }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(err.detail || 'Portföy haber hatası')
+  }
+  return res.json()
+}
+
 export async function askCompareQuestion(
   question: string,
   tickers: string[],
