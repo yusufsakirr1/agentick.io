@@ -6,9 +6,10 @@ Portföy endpoint'leri:
 """
 
 import asyncio
+import logging
 from collections import defaultdict
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from backend.auth import get_current_user
@@ -18,7 +19,18 @@ from backend.services.metrics_utils import (
 
 from src.agent.graph import run_agent
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+FETCH_TIMEOUT = 60   # saniye — yfinance veri çekme
+AGENT_TIMEOUT = 120  # saniye — LLM agent
+
+# Konsantrasyon eşikleri
+HOLDING_CONCENTRATION_THRESHOLD = 30   # %
+SECTOR_CONCENTRATION_THRESHOLD = 40    # %
+MAX_DIVIDEND_RESULTS = 20
+MAX_NEWS_RESULTS = 20
 
 
 # ── Request Models ──
@@ -48,111 +60,120 @@ class PortfolioNewsRequest(BaseModel):
 @router.post("/portfolio/metrics")
 async def portfolio_metrics(request: PortfolioMetricsRequest, current_user: dict = Depends(get_current_user)):
     if not request.holdings:
-        return {"error": "En az 1 holding gerekli."}
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="En az 1 holding gerekli.")
 
     tickers = list({h.ticker.strip().upper() for h in request.holdings})
 
     # Güncel veri çek
     from src.ingestion.bist_finance_client import fetch_and_store
-    await asyncio.gather(*[asyncio.to_thread(fetch_and_store, t) for t in tickers])
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*[asyncio.to_thread(fetch_and_store, t) for t in tickers]),
+            timeout=FETCH_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("yfinance fetch timeout (portfolio): %s", tickers)
+    except Exception as e:
+        logger.warning("yfinance fetch hatası (portfolio): %s", e)
 
     if not DB_PATH.exists():
-        return {"error": "Veritabanı oluşturulamadı."}
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Veritabanı oluşturulamadı.")
 
     conn = get_conn()
+    try:
+        # Per-ticker metrikleri topla
+        ticker_data = {}
+        for t in tickers:
+            ticker_data[t] = build_ticker_metrics(conn, t)
 
-    # Per-ticker metrikleri topla
-    ticker_data = {}
-    for t in tickers:
-        ticker_data[t] = build_ticker_metrics(conn, t)
+        # Per-holding hesaplamalar
+        holdings_result = []
+        total_value = 0.0
+        total_cost = 0.0
 
-    # Per-holding hesaplamalar
-    holdings_result = []
-    total_value = 0.0
-    total_cost = 0.0
+        for h in request.holdings:
+            t = h.ticker.strip().upper()
+            data = ticker_data.get(t, {})
+            current_price = data.get("current_price") or 0
+            market_value = current_price * h.shares
+            cost_basis = h.avgCost * h.shares
+            profit_loss = market_value - cost_basis
+            profit_loss_pct = ((market_value / cost_basis) - 1) * 100 if cost_basis > 0 else 0
 
-    for h in request.holdings:
-        t = h.ticker.strip().upper()
-        data = ticker_data.get(t, {})
-        current_price = data.get("current_price") or 0
-        market_value = current_price * h.shares
-        cost_basis = h.avgCost * h.shares
-        profit_loss = market_value - cost_basis
-        profit_loss_pct = ((market_value / cost_basis) - 1) * 100 if cost_basis > 0 else 0
+            total_value += market_value
+            total_cost += cost_basis
 
-        total_value += market_value
-        total_cost += cost_basis
+            holdings_result.append({
+                "ticker": t,
+                "shares": h.shares,
+                "avgCost": h.avgCost,
+                "currentPrice": current_price,
+                "marketValue": market_value,
+                "costBasis": cost_basis,
+                "profitLoss": profit_loss,
+                "profitLossPct": profit_loss_pct,
+                "weight": 0,  # hesaplanacak
+                "sector": data.get("sector") or "Bilinmeyen",
+                "pe_ratio": data.get("pe_ratio"),
+                "dividend_yield": data.get("dividend_yield"),
+                "net_margin": data.get("net_margin"),
+            })
 
-        holdings_result.append({
-            "ticker": t,
-            "shares": h.shares,
-            "avgCost": h.avgCost,
-            "currentPrice": current_price,
-            "marketValue": market_value,
-            "costBasis": cost_basis,
-            "profitLoss": profit_loss,
-            "profitLossPct": profit_loss_pct,
-            "weight": 0,  # hesaplanacak
-            "sector": data.get("sector") or "Bilinmeyen",
-            "pe_ratio": data.get("pe_ratio"),
-            "dividend_yield": data.get("dividend_yield"),
-            "net_margin": data.get("net_margin"),
-        })
+        # Ağırlık hesapla
+        for h in holdings_result:
+            h["weight"] = (h["marketValue"] / total_value * 100) if total_value > 0 else 0
 
-    # Ağırlık hesapla
-    for h in holdings_result:
-        h["weight"] = (h["marketValue"] / total_value * 100) if total_value > 0 else 0
+        # Sektör dağılımı
+        sector_map: dict[str, dict] = defaultdict(lambda: {"weight": 0.0, "tickers": []})
+        for h in holdings_result:
+            s = h["sector"]
+            sector_map[s]["weight"] += h["weight"]
+            if h["ticker"] not in sector_map[s]["tickers"]:
+                sector_map[s]["tickers"].append(h["ticker"])
 
-    # Sektör dağılımı
-    sector_map: dict[str, dict] = defaultdict(lambda: {"weight": 0.0, "tickers": []})
-    for h in holdings_result:
-        s = h["sector"]
-        sector_map[s]["weight"] += h["weight"]
-        if h["ticker"] not in sector_map[s]["tickers"]:
-            sector_map[s]["tickers"].append(h["ticker"])
+        sector_allocation = [
+            {"sector": s, "weight": round(d["weight"], 1), "tickers": d["tickers"]}
+            for s, d in sorted(sector_map.items(), key=lambda x: -x[1]["weight"])
+        ]
 
-    sector_allocation = [
-        {"sector": s, "weight": round(d["weight"], 1), "tickers": d["tickers"]}
-        for s, d in sorted(sector_map.items(), key=lambda x: -x[1]["weight"])
-    ]
+        # Konsantrasyon uyarıları
+        warnings = []
+        for h in holdings_result:
+            if h["weight"] > HOLDING_CONCENTRATION_THRESHOLD:
+                warnings.append(f"{h['ticker']} portföyün %{h['weight']:.1f}'ini oluşturuyor (>%{HOLDING_CONCENTRATION_THRESHOLD})")
+        for sa in sector_allocation:
+            if sa["weight"] > SECTOR_CONCENTRATION_THRESHOLD:
+                warnings.append(f"{sa['sector']} sektörü portföyün %{sa['weight']:.1f}'ini oluşturuyor (>%{SECTOR_CONCENTRATION_THRESHOLD})")
 
-    # Konsantrasyon uyarıları
-    warnings = []
-    for h in holdings_result:
-        if h["weight"] > 30:
-            warnings.append(f"{h['ticker']} portföyün %{h['weight']:.1f}'ini oluşturuyor (>%30)")
-    for sa in sector_allocation:
-        if sa["weight"] > 40:
-            warnings.append(f"{sa['sector']} sektörü portföyün %{sa['weight']:.1f}'ini oluşturuyor (>%40)")
+        # Ağırlıklı ortalamalar
+        weighted_pe = 0.0
+        weighted_div = 0.0
+        weighted_margin = 0.0
+        pe_total_w = 0.0
+        div_total_w = 0.0
+        margin_total_w = 0.0
 
-    # Ağırlıklı ortalamalar
-    weighted_pe = 0.0
-    weighted_div = 0.0
-    weighted_margin = 0.0
-    pe_total_w = 0.0
-    div_total_w = 0.0
-    margin_total_w = 0.0
+        for h in holdings_result:
+            w = h["weight"] / 100
+            if h.get("pe_ratio"):
+                weighted_pe += h["pe_ratio"] * w
+                pe_total_w += w
+            if h.get("dividend_yield"):
+                weighted_div += h["dividend_yield"] * w
+                div_total_w += w
+            if h.get("net_margin"):
+                weighted_margin += h["net_margin"] * w
+                margin_total_w += w
 
-    for h in holdings_result:
-        w = h["weight"] / 100
-        if h.get("pe_ratio"):
-            weighted_pe += h["pe_ratio"] * w
-            pe_total_w += w
-        if h.get("dividend_yield"):
-            weighted_div += h["dividend_yield"] * w
-            div_total_w += w
-        if h.get("net_margin"):
-            weighted_margin += h["net_margin"] * w
-            margin_total_w += w
+        # Temettü takvimi
+        all_dividends = []
+        for t in tickers:
+            divs = fetch_dividends(conn, t)
+            all_dividends.extend(divs)
+        all_dividends.sort(key=lambda d: d.get("ex_date", ""), reverse=True)
 
-    # Temettü takvimi
-    all_dividends = []
-    for t in tickers:
-        divs = fetch_dividends(conn, t)
-        all_dividends.extend(divs)
-    all_dividends.sort(key=lambda d: d.get("ex_date", ""), reverse=True)
-
-    conn.close()
+    finally:
+        conn.close()
 
     total_profit_loss = total_value - total_cost
     total_profit_loss_pct = ((total_value / total_cost) - 1) * 100 if total_cost > 0 else 0
@@ -170,7 +191,7 @@ async def portfolio_metrics(request: PortfolioMetricsRequest, current_user: dict
         },
         "sectorAllocation": sector_allocation,
         "warnings": warnings,
-        "dividends": all_dividends[:20],
+        "dividends": all_dividends[:MAX_DIVIDEND_RESULTS],
     }
 
 
@@ -182,18 +203,23 @@ async def portfolio_ask(request: PortfolioAskRequest, current_user: dict = Depen
     question = request.question.strip()
 
     if not question:
-        return {"error": "Soru boş olamaz."}
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Soru boş olamaz.")
     if not tickers:
-        return {"error": "En az 1 ticker gerekli."}
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="En az 1 ticker gerekli.")
 
     try:
-        result = await asyncio.to_thread(
-            run_agent, question, tickers[0], request.conversation_history, tickers if len(tickers) > 1 else None
+        result = await asyncio.wait_for(
+            asyncio.to_thread(
+                run_agent, question, tickers[0], request.conversation_history, tickers if len(tickers) > 1 else None
+            ),
+            timeout=AGENT_TIMEOUT,
         )
+    except asyncio.TimeoutError:
+        logger.error("Agent timeout (portfolio): %s — %s", tickers, question[:80])
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="İstek zaman aşımına uğradı.")
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return {"error": f"Agent hatası: {str(e)}"}
+        logger.error("Agent hatası (portfolio): %s", e)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Sunucu hatası oluştu.")
 
     return {
         "answer": result["answer"],
@@ -211,7 +237,7 @@ async def portfolio_ask(request: PortfolioAskRequest, current_user: dict = Depen
 async def portfolio_news(request: PortfolioNewsRequest, current_user: dict = Depends(get_current_user)):
     tickers = [t.strip().upper() for t in request.tickers if t.strip()]
     if not tickers:
-        return {"error": "En az 1 ticker gerekli."}
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="En az 1 ticker gerekli.")
 
     from src.ingestion.news_client import search_news, fetch_news_if_stale, KNOWN_TICKERS
 
@@ -247,5 +273,5 @@ async def portfolio_news(request: PortfolioNewsRequest, current_user: dict = Dep
     return {
         "tickers": tickers,
         "count": len(all_articles),
-        "articles": all_articles[:20],
+        "articles": all_articles[:MAX_NEWS_RESULTS],
     }

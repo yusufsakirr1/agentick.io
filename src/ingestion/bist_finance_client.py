@@ -5,12 +5,15 @@ Kullanım:
     python -m src.ingestion.bist_finance_client --ticker THYAO
 """
 
+import logging
 import sqlite3
 import argparse
 from pathlib import Path
 
 import yfinance as yf
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 DB_PATH = Path("data/bist_financials.db")
 
@@ -109,7 +112,7 @@ def _safe(val) -> float | None:
 
 def fetch_and_store(ticker: str) -> None:
     symbol = f"{ticker}.IS"
-    print(f"yfinance'den çekiliyor: {symbol}")
+    logger.info("yfinance'den çekiliyor: %s", symbol)
     yf_ticker = yf.Ticker(symbol)
 
     conn = get_connection()
@@ -140,9 +143,9 @@ def fetch_and_store(ticker: str) -> None:
                 )
                 rows += 1
             conn.commit()
-            print(f"  Gelir tablosu: {rows} dönem kaydedildi")
+            logger.info("  Gelir tablosu: %d dönem kaydedildi", rows)
     except Exception as e:
-        print(f"  Gelir tablosu hatası: {e}")
+        logger.error("  Gelir tablosu hatası: %s", e)
 
     # --- Bilanço ---
     try:
@@ -169,9 +172,9 @@ def fetch_and_store(ticker: str) -> None:
                 )
                 rows += 1
             conn.commit()
-            print(f"  Bilanço: {rows} dönem kaydedildi")
+            logger.info("  Bilanço: %d dönem kaydedildi", rows)
     except Exception as e:
-        print(f"  Bilanço hatası: {e}")
+        logger.error("  Bilanço hatası: %s", e)
 
     # --- Nakit akış ---
     try:
@@ -198,9 +201,9 @@ def fetch_and_store(ticker: str) -> None:
                 )
                 rows += 1
             conn.commit()
-            print(f"  Nakit akış: {rows} dönem kaydedildi")
+            logger.info("  Nakit akış: %d dönem kaydedildi", rows)
     except Exception as e:
-        print(f"  Nakit akış hatası: {e}")
+        logger.error("  Nakit akış hatası: %s", e)
 
     # --- Sektör kolonu ekle (ALTER TABLE — zaten varsa pass) ---
     try:
@@ -252,9 +255,9 @@ def fetch_and_store(ticker: str) -> None:
             ),
         )
         conn.commit()
-        print(f"  Oranlar: dönemsel net marjlar + anlık veriler kaydedildi (fiyat: {info.get('currentPrice')} TRY)")
+        logger.info("  Oranlar: dönemsel net marjlar + anlık veriler kaydedildi (fiyat: %s TRY)", info.get("currentPrice"))
     except Exception as e:
-        print(f"  Oranlar hatası: {e}")
+        logger.error("  Oranlar hatası: %s", e)
 
     # --- Temettü ---
     try:
@@ -270,9 +273,9 @@ def fetch_and_store(ticker: str) -> None:
                 )
                 rows += 1
             conn.commit()
-            print(f"  Temettü: {rows} ödeme kaydedildi")
+            logger.info("  Temettü: %d ödeme kaydedildi", rows)
     except Exception as e:
-        print(f"  Temettü hatası: {e}")
+        logger.error("  Temettü hatası: %s", e)
 
     # --- Bedelsiz sermaye artırımı (stock splits) ---
     try:
@@ -290,15 +293,16 @@ def fetch_and_store(ticker: str) -> None:
                     )
                     rows += 1
             conn.commit()
-            print(f"  Bedelsiz: {rows} işlem kaydedildi")
+            logger.info("  Bedelsiz: %d işlem kaydedildi", rows)
     except Exception as e:
-        print(f"  Bedelsiz hatası: {e}")
+        logger.error("  Bedelsiz hatası: %s", e)
 
     conn.close()
-    print(f"\nTamamlandı. Veritabanı: {DB_PATH}")
+    logger.info("Tamamlandı. Veritabanı: %s", DB_PATH)
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser()
     parser.add_argument("--ticker", default="THYAO")
     args = parser.parse_args()

@@ -5,6 +5,7 @@ Kullanım:
     python -m src.ingestion.pdf_chunker data/raw/THYAO_xxxx.pdf
 """
 
+import logging
 import re
 import sys
 from pathlib import Path
@@ -12,6 +13,7 @@ from dataclasses import dataclass
 
 import fitz  # pymupdf
 
+logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 600       # hedef token sayısı (yaklaşık kelime × 1.3)
 CHUNK_OVERLAP = 80     # örtüşme (context sürekliliği için)
@@ -77,7 +79,7 @@ def split_into_chunks(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CH
 def chunk_pdf(pdf_path: Path, ticker: str) -> list[Chunk]:
     """PDF'i chunk'lara böler ve metadata ekler."""
     pages = extract_text_by_page(pdf_path)
-    print(f"{pdf_path.name}: {len(pages)} sayfa okundu")
+    logger.info("%s: %d sayfa okundu", pdf_path.name, len(pages))
 
     all_chunks: list[Chunk] = []
     current_section = "Giriş"
@@ -98,11 +100,12 @@ def chunk_pdf(pdf_path: Path, ticker: str) -> list[Chunk]:
                 source_file=pdf_path.name,
             ))
 
-    print(f"Toplam {len(all_chunks)} chunk oluşturuldu")
+    logger.info("Toplam %d chunk oluşturuldu", len(all_chunks))
     return all_chunks
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     if len(sys.argv) < 2:
         print("Kullanım: python -m src.ingestion.pdf_chunker <pdf_path> [ticker]")
         sys.exit(1)

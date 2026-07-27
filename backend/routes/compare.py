@@ -5,9 +5,9 @@ Karşılaştırma endpoint'leri:
 """
 
 import asyncio
-from pathlib import Path
+import logging
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from backend.auth import get_current_user
@@ -15,7 +15,12 @@ from backend.services.metrics_utils import get_conn, build_ticker_metrics, DB_PA
 
 from src.agent.graph import run_agent
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+FETCH_TIMEOUT = 60   # saniye — yfinance veri çekme
+AGENT_TIMEOUT = 120  # saniye — LLM agent
 
 
 @router.get("/compare/metrics")
@@ -23,20 +28,30 @@ async def compare_metrics(tickers: str = Query(..., description="Virgülle ayrı
     ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
 
     if len(ticker_list) < 2 or len(ticker_list) > 5:
-        return {"error": "2 ile 5 arasında ticker gerekli."}
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="2 ile 5 arasında ticker gerekli.")
 
     # Her zaman güncel veri çek (fiyat, oran vb. sürekli değişiyor)
     from src.ingestion.bist_finance_client import fetch_and_store
-    await asyncio.gather(*[asyncio.to_thread(fetch_and_store, t) for t in ticker_list])
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*[asyncio.to_thread(fetch_and_store, t) for t in ticker_list]),
+            timeout=FETCH_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("yfinance fetch timeout (compare): %s", ticker_list)
+    except Exception as e:
+        logger.warning("yfinance fetch hatası (compare): %s", e)
 
     if not DB_PATH.exists():
-        return {"error": "Veritabanı oluşturulamadı."}
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Veritabanı oluşturulamadı.")
 
     conn = get_conn()
-    metrics = {}
-    for t in ticker_list:
-        metrics[t] = build_ticker_metrics(conn, t)
-    conn.close()
+    try:
+        metrics = {}
+        for t in ticker_list:
+            metrics[t] = build_ticker_metrics(conn, t)
+    finally:
+        conn.close()
 
     return {"tickers": ticker_list, "metrics": metrics}
 
@@ -55,18 +70,21 @@ async def compare_ask(request: CompareAskRequest, current_user: dict = Depends(g
     question = request.question.strip()
 
     if not question:
-        return {"error": "Soru boş olamaz."}
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Soru boş olamaz.")
     if len(tickers) < 2:
-        return {"error": "En az 2 ticker gerekli."}
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="En az 2 ticker gerekli.")
 
     try:
-        result = await asyncio.to_thread(
-            run_agent, question, tickers[0], request.conversation_history, tickers
+        result = await asyncio.wait_for(
+            asyncio.to_thread(run_agent, question, tickers[0], request.conversation_history, tickers),
+            timeout=AGENT_TIMEOUT,
         )
+    except asyncio.TimeoutError:
+        logger.error("Agent timeout (compare): %s — %s", tickers, question[:80])
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="İstek zaman aşımına uğradı.")
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return {"error": f"Agent hatası: {str(e)}"}
+        logger.error("Agent hatası (compare): %s", e)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Sunucu hatası oluştu.")
 
     return {
         "answer": result["answer"],

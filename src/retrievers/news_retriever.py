@@ -6,7 +6,11 @@ Kullanım:
     results = search("THYAO hakkında son haberler", ticker="THYAO")
 """
 
+import logging
+
 from src.ingestion.news_client import fetch_news_if_stale, cleanup_old_news, search_news
+
+logger = logging.getLogger(__name__)
 
 
 def _score_result(article: dict, query: str, ticker: str) -> float:
@@ -44,7 +48,7 @@ def search(query: str, ticker: str = "THYAO", top_k: int = 5) -> list[dict]:
     # 1. Cache bayatsa RSS'ten çek
     new_count = fetch_news_if_stale()
     if new_count:
-        print(f"  {new_count} yeni haber çekildi.")
+        logger.info("%d yeni haber çekildi.", new_count)
 
     # 2. Eski haberleri temizle
     cleanup_old_news()

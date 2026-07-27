@@ -32,6 +32,9 @@ Her oturuma bu dosyayı atarak nereden devam edeceğimizi belirleriz.
 | Routing (Frontend) | react-router-dom v7 | Aktif |
 | İkonlar | lucide-react | Aktif |
 | Gözlemlenebilirlik | LangSmith | Aktif |
+| Test | pytest + pytest-asyncio (14 test) | Aktif |
+| CI/CD | GitHub Actions (test + build) | Aktif |
+| Logging | Python logging modülü (structured) | Aktif |
 
 ---
 
@@ -40,30 +43,30 @@ Her oturuma bu dosyayı atarak nereden devam edeceğimizi belirleriz.
 ```
 agentick.io/
 ├── backend/
-│   ├── main.py
-│   ├── auth.py                 # Firebase Auth + dev mode bypass
+│   ├── main.py                   # FastAPI app + logging config
+│   ├── auth.py                   # Firebase Auth + dev mode bypass (production-safe)
 │   ├── routes/
-│   │   ├── upload.py           # POST /api/upload
-│   │   ├── query.py            # POST /api/ask
-│   │   ├── fetch_data.py       # POST /api/fetch-data
-│   │   ├── fetch_news.py       # POST /api/fetch-news
-│   │   ├── compare.py          # GET /api/compare/metrics, POST /api/compare/ask
-│   │   └── portfolio.py        # POST /api/portfolio/metrics, ask, news
+│   │   ├── upload.py             # POST /api/upload (ticker whitelist, 50MB limit, safe filename)
+│   │   ├── query.py              # POST /api/ask (120s timeout)
+│   │   ├── fetch_data.py         # POST /api/fetch-data (60s timeout)
+│   │   ├── fetch_news.py         # POST /api/fetch-news
+│   │   ├── compare.py            # GET /api/compare/metrics, POST /api/compare/ask (timeout + try/finally)
+│   │   └── portfolio.py          # POST /api/portfolio/metrics, ask, news (timeout + try/finally)
 │   └── services/
-│       ├── pdf_pipeline.py     # PDF → SQLite + Qdrant
-│       └── metrics_utils.py    # Paylaşılan metrik helper'lar (compare + portfolio)
+│       ├── pdf_pipeline.py       # PDF → SQLite + Qdrant
+│       └── metrics_utils.py      # Paylaşılan metrik helper'lar (compare + portfolio)
 ├── src/
 │   ├── agent/
-│   │   ├── state.py            # AgentState (tickers alanı dahil)
-│   │   ├── planner_node.py     # Tek + çoklu ticker prompt'ları
-│   │   ├── router_node.py      # Auto-fetch + per-task ticker + timeout
+│   │   ├── state.py              # AgentState (tickers alanı dahil)
+│   │   ├── planner_node.py       # Tek + çoklu ticker prompt'ları
+│   │   ├── router_node.py        # Auto-fetch + per-task ticker + timeout
 │   │   ├── critic_node.py
-│   │   ├── synthesizer_node.py # Tek + karşılaştırma prompt'ları
-│   │   └── graph.py            # run_agent(question, ticker, history, tickers)
+│   │   ├── synthesizer_node.py   # Tek + karşılaştırma prompt'ları
+│   │   └── graph.py              # run_agent(question, ticker, history, tickers)
 │   ├── retrievers/
-│   │   ├── sql_retriever.py    # Text-to-SQL (SQLite)
-│   │   ├── vector_retriever.py # Qdrant semantic search (15s timeout)
-│   │   └── news_retriever.py   # Haber arama
+│   │   ├── sql_retriever.py      # Text-to-SQL (SQLite, 8 tablo)
+│   │   ├── vector_retriever.py   # Qdrant semantic search (singleton, thread-safe, hata toleranslı)
+│   │   └── news_retriever.py     # Haber arama (AND keyword)
 │   └── ingestion/
 │       ├── bist_finance_client.py  # yfinance → SQLite (temettü + bedelsiz + sektör dahil)
 │       ├── news_client.py          # RSS haber çekme (AND keyword arama)
@@ -71,14 +74,14 @@ agentick.io/
 │       └── build_vector_index.py   # chunks → Qdrant
 ├── frontend/
 │   └── src/
-│       ├── main.tsx            # BrowserRouter + AuthProvider sarma
-│       ├── App.tsx             # Auth guard + Layout shell + Routes
+│       ├── main.tsx              # BrowserRouter + AuthProvider sarma
+│       ├── App.tsx               # Auth guard + Layout shell + Routes
 │       ├── config/
-│       │   └── firebase.ts     # Firebase config + GoogleAuthProvider
+│       │   └── firebase.ts       # Firebase config + GoogleAuthProvider
 │       ├── contexts/
-│       │   └── AuthContext.tsx  # Firebase Auth context (signInWithGoogle, signOut)
+│       │   └── AuthContext.tsx    # Firebase Auth context (signInWithGoogle, signOut)
 │       ├── constants/
-│       │   └── tickers.ts      # BIST-30 tek kaynak
+│       │   └── tickers.ts        # BIST-30 tek kaynak
 │       ├── pages/
 │       │   ├── LoginPage.tsx       # Landing page (9 bölüm, inline SVG mockup'lar)
 │       │   ├── ChatPage.tsx        # Sohbet sayfası
@@ -106,11 +109,23 @@ agentick.io/
 │       └── services/
 │           ├── conversationStorage.ts
 │           └── portfolioService.ts   # Firestore portföy CRUD
+├── tests/
+│   ├── conftest.py               # Shared fixtures (TestClient + auth bypass)
+│   ├── test_health.py            # Health endpoint testi
+│   ├── test_auth.py              # Auth middleware testleri (dev mode + production mode)
+│   └── test_validation.py        # 12 input validation testi
+├── .github/
+│   └── workflows/
+│       └── ci.yml                # CI/CD: pytest + frontend build
 ├── data/
-│   ├── raw/                    # Yüklenen PDF'ler
-│   └── bist_financials.db      # SQLite
-├── pyproject.toml
-└── .env
+│   ├── raw/                      # Yüklenen PDF'ler
+│   └── bist_financials.db        # SQLite
+├── docs/
+│   └── assets/
+│       └── chat-ui.png           # UI ekran görüntüsü
+├── pyproject.toml                # uv + pytest config (dev extras)
+├── .env.example                  # Backend ortam değişkenleri şablonu
+└── frontend/.env.example         # Frontend Firebase config şablonu
 ```
 
 ---
@@ -126,10 +141,12 @@ agentick.io/
 | 4 | Çoklu Şirket Karşılaştırma | ✅ |
 | 5 | Firebase Auth + Landing Page Yeniden Tasarım | ✅ |
 | 6 | Portföy Dashboard + Bedelsiz Sermaye Artırımı | ✅ |
+| Sprint 1 | Güvenlik Sertleştirme (API key temizliği, auth fix, timeout, connection leak) | ✅ |
+| Sprint 2 | Test Altyapısı + CI/CD + Logging + Input Validation | ✅ |
 
 ---
 
-## Son Durum (Faz 6 sonrası)
+## Son Durum (Sprint 2 sonrası)
 
 ### Çalışan Özellikler
 - LangGraph agent: Planner → Router → Critic → Synthesizer döngüsü
@@ -154,18 +171,30 @@ agentick.io/
 - **Portföy Dashboard:** Firestore'da portföy saklama, per-holding metrikler, sektör dağılımı (CSS bar chart), konsantrasyon uyarıları, temettü takvimi (Türkçe tarih), portföy haberleri, AI soru-cevap
 - **Haber arama iyileştirmesi:** OR → AND keyword araması (alakasız haber önleme)
 
+### Güvenlik ve Kalite (Sprint 1 + Sprint 2)
+- **API key temizliği:** git geçmişinden `.env` dosyaları `git filter-repo` ile silindi, tüm API key'ler rotate edildi
+- **Firebase Auth production-safe:** Production'da `FIREBASE_PRIVATE_KEY` yoksa `RuntimeError` fırlatır, hata mesajından internal detay sızması engellendi
+- **Qdrant hata toleransı:** Singleton client (thread-safe), bağlantı hatalarında boş liste döner (crash etmez)
+- **API timeout'ları:** Agent çağrıları 120s, yfinance fetch 60s (`asyncio.wait_for`)
+- **DB bağlantı leak önleme:** Tüm SQLite bağlantıları `try/finally` ile kapatılır
+- **Input validation:** BIST-30 ticker whitelist (30 hisse), 50MB dosya boyutu limiti, sadece PDF kabul, güvenli dosya adı regex, tüm endpoint'lerde `HTTPException`
+- **Structured logging:** Tüm `print()` ifadeleri `logging` modülüne migrate edildi (INFO/WARNING/ERROR seviyeleri)
+- **Test altyapısı:** 14 pytest testi — health endpoint, auth middleware (dev + production), 12 input validation testi
+- **CI/CD pipeline:** GitHub Actions — her push/PR'da backend testleri + frontend TypeScript check + build
+- **`.env.example` şablonları:** Backend ve frontend için ortam değişkeni şablonları
+
 ### API Endpoint'leri
 
 | Method | Endpoint | Açıklama |
 |---|---|---|
-| POST | `/api/upload/sync` | PDF yükle ve indexle |
-| POST | `/api/ask` | Soru sor, agent yanıtını al |
-| POST | `/api/fetch-data` | yfinance verisini SQLite'a çek |
+| POST | `/api/upload/sync` | PDF yükle ve indexle (ticker whitelist + 50MB limit) |
+| POST | `/api/ask` | Soru sor, agent yanıtını al (120s timeout) |
+| POST | `/api/fetch-data` | yfinance verisini SQLite'a çek (60s timeout) |
 | POST | `/api/fetch-news` | Haber verilerini çek |
 | GET | `/api/compare/metrics` | 2 ticker için metrik karşılaştırması (yfinance auto-fetch dahil) |
-| POST | `/api/compare/ask` | Karşılaştırma sorusu sor (multi-ticker agent) |
+| POST | `/api/compare/ask` | Karşılaştırma sorusu sor (multi-ticker agent, 120s timeout) |
 | POST | `/api/portfolio/metrics` | Portföy metrikleri, sektör dağılımı, uyarılar, temettü takvimi |
-| POST | `/api/portfolio/ask` | Portföy hakkında AI soru-cevap (multi-ticker agent) |
+| POST | `/api/portfolio/ask` | Portföy hakkında AI soru-cevap (multi-ticker agent, 120s timeout) |
 | POST | `/api/portfolio/news` | Portföy hisselerine ait haberler |
 | GET | `/api/health` | Sağlık kontrolü |
 
@@ -204,6 +233,10 @@ ChatGPT genel amaçlı — agentick BIST'e özel. Fark yaratan özellikler:
 **Gerekli:** KAP veri dağıtım sözleşmesi veya alternatif veri kaynakları (Finnet, Matriks, İş Yatırım API).
 
 ### 5. Ürünleştirme ve Deployment
+- Dockerfile + docker-compose (backend + frontend)
+- Rate limiting (kullanıcı başına sorgu limiti)
+- CORS restriction (production domain'e sınırlama)
+- Swagger/OpenAPI dökümantasyonu
 - Kullanıcı başına aylık sorgu kotası (Firestore)
 - Deployment — Railway (backend) + Vercel (frontend)
 - Eval sistemi — 30 BIST sorusu ile doğruluk metrikleri
@@ -213,4 +246,4 @@ ChatGPT genel amaçlı — agentick BIST'e özel. Fark yaratan özellikler:
 
 ## Devam Edilecek Yer
 
-Portföy dashboard tamamlandı. Sıradaki en yüksek değerli özellik **Otomatik Screening** — tüm BIST-30 için periyodik veri çekme ve kullanıcının belirlediği kriterlere göre hisse taraması. Ardından **Deployment** (Railway + Vercel) ile canlıya alınabilir.
+Sprint 1 ve Sprint 2 tamamlandı. Tüm güvenlik sertleştirmeleri, test altyapısı, CI/CD pipeline ve structured logging yerinde. Sıradaki en yüksek değerli adım **Deployment** (Railway + Vercel) ile canlıya alma, ardından **Otomatik Screening** özelliği.

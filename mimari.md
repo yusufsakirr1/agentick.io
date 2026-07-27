@@ -22,8 +22,23 @@ React Frontend (Vite, port 5173, react-router-dom)
     │  POST /api/portfolio/news
     ▼
 FastAPI Backend (Uvicorn, port 8000)
+    │  ┌─ Auth Layer ─────────────────────────────────┐
+    │  │  Firebase token doğrulama (verify_firebase_token)   │
+    │  │  Dev mode: tüm token'lar kabul edilir               │
+    │  │  Production: FIREBASE_PRIVATE_KEY zorunlu            │
+    │  └──────────────────────────────────────────────────────┘
+    │  ┌─ Validation Layer ───────────────────────────┐
+    │  │  Ticker whitelist (30 BIST-30 hissesi)              │
+    │  │  Dosya: sadece PDF, max 50MB, safe filename         │
+    │  │  Input: HTTPException ile hata döndürme             │
+    │  └──────────────────────────────────────────────────────┘
+    │  ┌─ Timeout Layer ──────────────────────────────┐
+    │  │  Agent çağrıları: 120s (asyncio.wait_for)           │
+    │  │  yfinance fetch: 60s                                │
+    │  │  Router task: 30s, Qdrant: 15s                      │
+    │  └──────────────────────────────────────────────────────┘
     │
-    ├── PDF Pipeline ──────────────────────────────────────┐
+    ├── PDF Pipeline ──────────────────────────────────┐
     │   pdfplumber → pdf_tables (SQLite)                   │
     │   PyMuPDF + pdf_chunker → embedding → Qdrant         │
     │   yfinance → income_statement / balance_sheet / ...  │
@@ -41,7 +56,7 @@ FastAPI Backend (Uvicorn, port 8000)
         ROUTER NODE (asyncio.gather + 30s timeout/task)
             ├── type="sql"    → SQL Retriever → SQLite (per-task ticker)
             │                    └── boş dönerse → auto-fetch (yfinance) → tekrar sorgula
-            ├── type="vector" → Vector Retriever → Qdrant (15s timeout)
+            ├── type="vector" → Vector Retriever → Qdrant (15s timeout, hata toleranslı)
             └── type="news"   → News Retriever → SQLite (news_articles)
             │
             ▼
@@ -167,6 +182,12 @@ async def run_task_with_timeout(task):
 **Collection:** `kap_filings`
 **Filtreleme:** `ticker` payload filtresi ile hisseye özgü arama
 
+**Güvenilirlik özellikleri (Sprint 1):**
+- Singleton `QdrantClient` + singleton `SentenceTransformer` (thread-safe, `threading.Lock()`)
+- `os.environ.get()` ile KeyError önleme
+- Tüm `search()` fonksiyonu try/except ile sarılı — Qdrant hatalarında boş liste döner (crash etmez)
+- Payload erişimi `.get()` ile (KeyError koruması)
+
 **Citation formatı:** `KAP — THYAO Faaliyet Raporu, s.23 (Finansal Durum)`
 
 **Çıktı yapısı:**
@@ -210,6 +231,8 @@ Her retry'da `state["retrieved"]` içindeki mevcut `text` değerleri bir `set`'e
 ```
 POST /api/upload/sync
     ↓
+[Validation: ticker whitelist + PDF check + 50MB limit + safe filename]
+    ↓
 backend/services/pdf_pipeline.py → process_pdf(pdf_path, ticker)
     │
     ├── 1. Tablo Çıkarma (pdfplumber)
@@ -234,6 +257,8 @@ backend/services/pdf_pipeline.py → process_pdf(pdf_path, ticker)
 ```
 POST /api/fetch-data {ticker: "THYAO"}
     ↓
+[Timeout: 60s asyncio.wait_for]
+    ↓
 bist_finance_client.fetch_and_store("THYAO")
     ↓
 yf.Ticker("THYAO.IS")
@@ -249,20 +274,52 @@ yf.Ticker("THYAO.IS")
 
 ## 5. FastAPI Backend
 
+### Güvenlik Katmanları
+
+```
+İstek gelir
+    ↓
+1. Firebase Auth (verify_firebase_token)
+    │  Dev mode: tüm token'lar kabul, mock user döner
+    │  Production: FIREBASE_PRIVATE_KEY yoksa RuntimeError fırlatır
+    │  Hata mesajından internal detay sızdırmaz
+    ↓
+2. Input Validation
+    │  Ticker whitelist: VALID_TICKERS set (30 BIST-30 hissesi)
+    │  Dosya: sadece PDF, max 50MB, SAFE_FILENAME_RE regex
+    │  Boş soru, eksik alan → HTTPException (400/422)
+    ↓
+3. Timeout
+    │  Agent çağrısı: 120s (asyncio.wait_for)
+    │  yfinance fetch: 60s
+    │  TimeoutError → 504 Gateway Timeout
+    ↓
+4. DB Connection Safety
+    │  Tüm SQLite bağlantıları try/finally ile kapatılır
+    │  Connection leak önleme
+    ↓
+5. Structured Logging
+    │  logging.basicConfig() ile merkezi config
+    │  Her modülde logger = logging.getLogger(__name__)
+    │  INFO/WARNING/ERROR seviyeleri
+    ↓
+İstek işlenir
+```
+
 ### Endpoint'ler
 
-| Method | Endpoint | Açıklama |
-|---|---|---|
-| GET | `/api/health` | Sağlık kontrolü, versiyon |
-| POST | `/api/upload` | PDF yükle (arka planda, async) |
-| POST | `/api/upload/sync` | PDF yükle ve indexle (senkron, frontend kullanır) |
-| POST | `/api/ask` | Soru sor, LangGraph agent yanıtını bekle |
-| POST | `/api/fetch-data` | yfinance verisini çek ve SQLite'a yaz |
-| GET | `/api/compare/metrics` | 2 ticker için metrik karşılaştırması (her çağrıda yfinance auto-fetch) |
-| POST | `/api/compare/ask` | Karşılaştırma chat sorusu (multi-ticker agent) |
-| POST | `/api/portfolio/metrics` | Portföy metrikleri: per-holding K/Z, sektör dağılımı, uyarılar, temettü takvimi |
-| POST | `/api/portfolio/ask` | Portföy AI soru-cevap (multi-ticker agent) |
-| POST | `/api/portfolio/news` | Portföy hisselerine ait haberler (ticker tag + keyword AND arama) |
+| Method | Endpoint | Açıklama | Timeout |
+|---|---|---|---|
+| GET | `/api/health` | Sağlık kontrolü, versiyon | — |
+| POST | `/api/upload` | PDF yükle (arka planda, async) | — |
+| POST | `/api/upload/sync` | PDF yükle ve indexle (senkron, frontend kullanır) | — |
+| POST | `/api/ask` | Soru sor, LangGraph agent yanıtını bekle | 120s |
+| POST | `/api/fetch-data` | yfinance verisini çek ve SQLite'a yaz | 60s |
+| GET | `/api/compare/metrics` | 2 ticker için metrik karşılaştırması (her çağrıda yfinance auto-fetch) | 60s |
+| POST | `/api/compare/ask` | Karşılaştırma chat sorusu (multi-ticker agent) | 120s |
+| POST | `/api/portfolio/metrics` | Portföy metrikleri: per-holding K/Z, sektör dağılımı, uyarılar, temettü takvimi | 60s |
+| POST | `/api/portfolio/ask` | Portföy AI soru-cevap (multi-ticker agent) | 120s |
+| POST | `/api/portfolio/news` | Portföy hisselerine ait haberler (ticker tag + keyword AND arama) | — |
 
 ### `/api/ask` Request / Response
 
@@ -656,9 +713,12 @@ Payload:
 | Build | Vite | 5.4.8 |
 | CSS | Tailwind CSS | 3.4.13 |
 | İkonlar | lucide-react | latest |
+| Test | pytest + pytest-asyncio | ≥8.0, ≥0.24 |
+| CI/CD | GitHub Actions | ubuntu-latest |
 | Gözlemlenebilirlik | LangSmith | LANGCHAIN_TRACING_V2=true |
 | Paket Yönetimi (PY) | uv | latest |
 | Paket Yönetimi (JS) | npm | latest |
+| Logging | Python logging modülü | built-in |
 
 ---
 
@@ -671,6 +731,12 @@ ANTHROPIC_API_KEY=sk-ant-...
 # Vektör DB
 QDRANT_URL=https://xxx.eu-central-1-0.aws.cloud.qdrant.io
 QDRANT_API_KEY=...
+
+# Ortam (development / production)
+ENVIRONMENT=development
+
+# Firebase Backend (production için)
+FIREBASE_PRIVATE_KEY=...
 
 # Firebase (frontend .env)
 VITE_FIREBASE_API_KEY=...
@@ -701,14 +767,61 @@ THYAO  TOASO  TUPRS  VAKBN  YKBNK
 
 ---
 
-## 11. İmplementasyon Durumu
+## 11. Test ve CI/CD (Sprint 2)
+
+### Test Altyapısı
+
+```
+tests/
+├── conftest.py          # Shared fixtures: TestClient + dev auth bypass
+├── test_health.py       # GET /api/health → 200, status=ok, version mevcut
+├── test_auth.py         # Dev mode mock user + production mode RuntimeError
+└── test_validation.py   # 12 input validation testi:
+                         #   - Boş soru → 400
+                         #   - Eksik alan → 422
+                         #   - Boş ticker → 400
+                         #   - Tek ticker karşılaştırma → 400
+                         #   - 6+ ticker karşılaştırma → 400
+                         #   - Boş portföy holdings → 400
+                         #   - Boş portföy sorusu → 400
+                         #   - Portföy ticker'sız → 400
+                         #   - Portföy haberleri ticker'sız → 400
+                         #   - Geçersiz ticker upload → 400
+                         #   - PDF olmayan dosya upload → 400
+```
+
+**Çalıştırma:** `uv run pytest tests/ -v` → 14 test, tümü geçiyor.
+
+### CI/CD Pipeline (`.github/workflows/ci.yml`)
+
+```yaml
+Tetikleyici: push veya PR → main branch
+
+Job 1: test (Backend)
+  1. Ubuntu makine
+  2. uv install + Python 3.12
+  3. uv sync --extra dev
+  4. uv run pytest tests/ -v
+  → Test başarısız → kırmızı uyarı
+
+Job 2: frontend-build (Frontend)
+  1. Node.js 20 + npm cache
+  2. npm ci
+  3. npx tsc --noEmit (tip kontrolü)
+  4. npm run build (Vite production build)
+  → Build başarısız → kırmızı uyarı
+```
+
+---
+
+## 12. İmplementasyon Durumu
 
 | Bileşen | Durum |
 |---|---|
 | LangGraph agent (Planner → Router → Critic → Synthesizer) | ✅ |
 | SQL Retriever (yfinance + pdf_tables) | ✅ |
-| Vector Retriever (Qdrant) | ✅ |
-| News Retriever (RSS haber arama) | ✅ |
+| Vector Retriever (Qdrant, singleton, thread-safe, hata toleranslı) | ✅ |
+| News Retriever (RSS haber arama, AND keyword) | ✅ |
 | Temettü verisi (yfinance .dividends) | ✅ |
 | Temettü verimi hesaplama (dividends JOIN ratios) | ✅ |
 | Auto-fetch (SQL boş → yfinance'den çek → tekrar sorgula) | ✅ |
@@ -720,8 +833,8 @@ THYAO  TOASO  TUPRS  VAKBN  YKBNK
 | Router duplicate önleme | ✅ |
 | BIST-30 ticker desteği | ✅ |
 | Çoklu şirket karşılaştırma (2 ticker, metrik tablo + chat) | ✅ |
-| React Router (/, /compare) | ✅ |
-| Sidebar navigasyonu (Sohbet/Karşılaştır) | ✅ |
+| React Router (/, /compare, /portfolio) | ✅ |
+| Sidebar navigasyonu (Sohbet/Karşılaştır/Portföy) | ✅ |
 | Shared constants (BIST_TICKERS tek kaynak) | ✅ |
 | Router task timeout (30s) + Qdrant timeout (15s) | ✅ |
 | Firebase Auth (Google OAuth, AuthContext) | ✅ |
@@ -732,18 +845,28 @@ THYAO  TOASO  TUPRS  VAKBN  YKBNK
 | Bedelsiz sermaye artırımı (stock_splits tablosu) | ✅ |
 | Haber AND keyword araması (false positive önleme) | ✅ |
 | Paylaşılan metrik helper'lar (metrics_utils.py) | ✅ |
+| **API key temizliği (git geçmişinden .env silme)** | ✅ |
+| **Firebase Auth production-safe (RuntimeError)** | ✅ |
+| **Qdrant hata toleransı (singleton, thread-safe, boş liste fallback)** | ✅ |
+| **API timeout'ları (agent 120s, fetch 60s)** | ✅ |
+| **DB bağlantı leak önleme (try/finally)** | ✅ |
+| **Input validation (ticker whitelist, 50MB limit, safe filename)** | ✅ |
+| **Structured logging (print → logging migrasyonu)** | ✅ |
+| **Test altyapısı (14 pytest testi)** | ✅ |
+| **CI/CD pipeline (GitHub Actions)** | ✅ |
+| **.env.example şablonları (backend + frontend)** | ✅ |
 | Otomatik screening/alert | ❌ Planlandı |
 | Kullanıcı kotası (Firestore) | ❌ Planlandı |
 | Deployment (Railway / Vercel) | ❌ Planlandı |
 
 ---
 
-## 12. Sonraki Adımlar
+## 13. Sonraki Adımlar
 
-1. **Otomatik Screening/Alert** — Kriter bazlı hisse taraması, bildirim
-2. **Zaman Serisi Takibi** — Watchlist, temettü/fiyat bildirimi
-3. **KAP Entegrasyonu** — Özel durum açıklamaları, endeks değişiklikleri
-4. **Deployment** — Railway (backend) + Vercel (frontend)
+1. **Deployment** — Railway (backend) + Vercel (frontend) ile canlıya alma
+2. **Otomatik Screening/Alert** — Kriter bazlı hisse taraması, bildirim
+3. **Zaman Serisi Takibi** — Watchlist, temettü/fiyat bildirimi
+4. **KAP Entegrasyonu** — Özel durum açıklamaları, endeks değişiklikleri
 5. **Kullanıcı Kotası** — Firestore ile aylık sorgu limiti
 6. **Eval sistemi** — 30 BIST sorusu ile doğruluk metrikleri
 7. **Stripe Entegrasyonu** — ₺199/ay Pro abonelik

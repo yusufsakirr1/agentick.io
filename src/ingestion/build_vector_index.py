@@ -5,6 +5,7 @@ Kullanım:
     python -m src.ingestion.build_vector_index --ticker THYAO --pdf data/raw/THYAO_xxxx.pdf
 """
 
+import logging
 import os
 import argparse
 from pathlib import Path
@@ -18,14 +19,16 @@ from src.ingestion.pdf_chunker import chunk_pdf, Chunk
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 COLLECTION_NAME = "kap_filings"
 VECTOR_SIZE = 768  # paraphrase-multilingual-mpnet-base-v2 boyutu
 EMBED_MODEL = "paraphrase-multilingual-mpnet-base-v2"  # Türkçe destekli, ücretsiz
 
 def get_qdrant_client() -> QdrantClient:
     return QdrantClient(
-        url=os.environ["QDRANT_URL"],
-        api_key=os.environ["QDRANT_API_KEY"],
+        url=os.environ.get("QDRANT_URL", ""),
+        api_key=os.environ.get("QDRANT_API_KEY", ""),
     )
 
 
@@ -38,9 +41,9 @@ def ensure_collection(client: QdrantClient):
             collection_name=COLLECTION_NAME,
             vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
         )
-        print(f"Collection oluşturuldu: {COLLECTION_NAME}")
+        logger.info("Collection oluşturuldu: %s", COLLECTION_NAME)
     else:
-        print(f"Collection zaten var: {COLLECTION_NAME}")
+        logger.info("Collection zaten var: %s", COLLECTION_NAME)
 
     # ticker alanı için keyword index (filtreleme için zorunlu)
     client.create_payload_index(
@@ -48,12 +51,12 @@ def ensure_collection(client: QdrantClient):
         field_name="ticker",
         field_schema=PayloadSchemaType.KEYWORD,
     )
-    print("ticker index hazır.")
+    logger.info("ticker index hazır.")
 
 
 def embed_chunks(chunks: list[Chunk]) -> list[list[float]]:
     """Chunk'ları yerel multilingual model ile embed et. İnternet/API gerekmez."""
-    print(f"  Model yükleniyor: {EMBED_MODEL} (ilk seferde ~500MB indirilir)")
+    logger.info("Model yükleniyor: %s (ilk seferde ~500MB indirilir)", EMBED_MODEL)
     model = SentenceTransformer(EMBED_MODEL)
     texts = [c.text for c in chunks]
     embeddings = model.encode(texts, show_progress_bar=True, batch_size=32)
@@ -83,29 +86,30 @@ def upload_to_qdrant(client: QdrantClient, chunks: list[Chunk], embeddings: list
             collection_name=COLLECTION_NAME,
             points=points[i:i + batch_size]
         )
-        print(f"  Yüklendi: {min(i + batch_size, len(points))}/{len(points)}")
+        logger.info("Yüklendi: %d/%d", min(i + batch_size, len(points)), len(points))
 
 
 def build_index(ticker: str, pdf_path: Path):
-    print(f"\n--- {ticker} index oluşturuluyor ---")
+    logger.info("--- %s index oluşturuluyor ---", ticker)
 
     # 1. PDF'i chunk'la
     chunks = chunk_pdf(pdf_path, ticker)
 
     # 2. Embed et
-    print(f"\nEmbedding üretiliyor ({len(chunks)} chunk)...")
+    logger.info("Embedding üretiliyor (%d chunk)...", len(chunks))
     embeddings = embed_chunks(chunks)
 
     # 3. Qdrant'a yükle
-    print(f"\nQdrant'a yükleniyor...")
+    logger.info("Qdrant'a yükleniyor...")
     client = get_qdrant_client()
     ensure_collection(client)
     upload_to_qdrant(client, chunks, embeddings)
 
-    print(f"\nTamamlandı. {len(chunks)} chunk Qdrant'a yazıldı.")
+    logger.info("Tamamlandı. %d chunk Qdrant'a yazıldı.", len(chunks))
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser()
     parser.add_argument("--ticker", required=True, help="Örn: THYAO")
     parser.add_argument("--pdf", required=True, help="PDF dosya yolu")

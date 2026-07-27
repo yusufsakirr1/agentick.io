@@ -1,5 +1,9 @@
 # Ortam
 .env
+.env.local
+.env.*.local
+frontend/.env
+frontend/.env.local
 
 # Veri
 data/raw/

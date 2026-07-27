@@ -4,11 +4,14 @@ asyncio.gather ile SQL ve vector retrieval eş zamanlı çalışır.
 """
 
 import asyncio
+import logging
 
 from src.agent.state import AgentState
 from src.retrievers.sql_retriever import search as sql_search
 from src.retrievers.vector_retriever import search as vector_search
 from src.retrievers.news_retriever import search as news_search
+
+logger = logging.getLogger(__name__)
 
 TASK_TIMEOUT = 30  # Her retriever task'ı için maks saniye
 
@@ -27,7 +30,7 @@ async def router_node(state: AgentState) -> dict:
                 # SQL boş döndüyse → yfinance'den çek, tekrar dene
                 if not results:
                     from src.ingestion.bist_finance_client import fetch_and_store
-                    print(f"  SQL boş döndü, yfinance'den çekiliyor: {task_ticker}")
+                    logger.info("SQL boş döndü, yfinance'den çekiliyor: %s", task_ticker)
                     await asyncio.to_thread(fetch_and_store, task_ticker)
                     results = await asyncio.to_thread(sql_search, query, task_ticker)
                 return results
@@ -40,7 +43,7 @@ async def router_node(state: AgentState) -> dict:
                     news_search, query, task_ticker, top_k
                 )
         except Exception as e:
-            print(f"  Retrieval hatası ({task_type}, {task_ticker}): {e}")
+            logger.error("Retrieval hatası (%s, %s): %s", task_type, task_ticker, e)
             return []
         return []
 
@@ -50,7 +53,7 @@ async def router_node(state: AgentState) -> dict:
         except asyncio.TimeoutError:
             task_type = task["type"]
             task_ticker = task.get("ticker", state["ticker"])
-            print(f"  Timeout ({task_type}, {task_ticker}): {TASK_TIMEOUT}s aşıldı, atlanıyor")
+            logger.warning("Timeout (%s, %s): %ds aşıldı, atlanıyor", task_type, task_ticker, TASK_TIMEOUT)
             return []
 
     tasks = [run_task_with_timeout(t) for t in state["sub_tasks"]]

@@ -1027,7 +1027,7 @@ Her soru bir kart:
 
 ---
 
-## 2026-07-24 — Perşembe
+## 2026-07-24 — Cuma
 **Faz: Faz 6 — Portföy Analiz Dashboard'u + Bedelsiz Sermaye Artırımı Verisi**
 
 Bu oturumda portföy analiz dashboard'u sıfırdan tasarlanıp uygulandı. Kullanıcı BIST hisselerinden oluşan bir portföy sepeti oluşturup AI destekli analiz yapabiliyor. Ayrıca bedelsiz sermaye artırımı (stock splits) verisi sisteme eklendi.
@@ -1193,3 +1193,206 @@ Bu oturumda portföy analiz dashboard'u sıfırdan tasarlanıp uygulandı. Kulla
 - [ ] Deployment (Railway + Vercel)
 - [ ] Custom domain (agentick.io)
 - [ ] Production environment variables
+
+---
+
+## 2026-07-27 — Pazartesi
+**Sprint 1 — Güvenlik Sertleştirme (Kritik Öncelik)**
+
+Kapsamlı proje denetimi sonrası tespit edilen güvenlik ve stabilite sorunları çözüldü.
+
+---
+
+### Adım 1 — API Key Temizliği ve Git Geçmişi
+
+**Sorun:** `.env` ve `frontend/.env` dosyaları git geçmişinde commit edilmişti. API key'ler (Anthropic, LangChain, Qdrant) geçmişten erişilebilir durumdaydı.
+
+**Çözüm:**
+- `git filter-repo --invert-paths --path .env --path frontend/.env --force` ile geçmişten silindi
+- `.gitignore`'a `frontend/.env`, `.env.local`, `.env.*.local`, `frontend/.env.local` eklendi
+- `.env.example` (backend) ve `frontend/.env.example` (frontend) şablonları oluşturuldu
+- Tüm API key'ler rotate edildi (Anthropic, LangChain, Qdrant — eski key'ler silindi)
+- `git push --force -u origin main` ile remote temizlendi
+- `git show origin/main:.env` → "fatal: path '.env' exists on disk, but not in 'origin/main'" ✅
+
+---
+
+### Adım 2 — Firebase Auth Production-Safe
+
+**Sorun:** `backend/auth.py` production'da `FIREBASE_PRIVATE_KEY` olmadan sessizce dev mode'a düşüyordu. Hata mesajında internal exception detayları sızıyordu.
+
+**Çözüm:**
+- `ENVIRONMENT` env var kontrolü eklendi
+- Production'da `FIREBASE_PRIVATE_KEY` yoksa `RuntimeError("FIREBASE_PRIVATE_KEY is required in production.")` fırlatılır
+- `_is_dev_mode` explicit flag ile kontrol
+- Hata mesajından exception detayları çıkarıldı (sadece "Token doğrulama başarısız")
+- `logging` modülüne geçildi (`logger.warning`, `logger.error`)
+
+---
+
+### Adım 3 — Qdrant Vector Retriever Hata Toleransı
+
+**Sorun:** Qdrant Cloud bağlantı hatalarında `vector_retriever.py` crash ediyordu. `os.environ["QDRANT_URL"]` KeyError fırlatabiliyordu. Her `search()` çağrısında yeni client oluşturuluyordu.
+
+**Çözüm:**
+- Singleton `QdrantClient` + singleton `SentenceTransformer` (thread-safe, `threading.Lock()`)
+- `os.environ.get()` ile KeyError önleme
+- Tüm `search()` fonksiyonu try/except ile sarıldı — Qdrant hatalarında boş liste döner
+- Payload erişimi `.get()` ile (defaults ile güvenli erişim)
+
+---
+
+### Adım 4 — API Endpoint Timeout'ları
+
+**Sorun:** Agent çağrıları veya yfinance fetch takılırsa istek sonsuza kadar bekleyebiliyordu. Validation hataları `return {"error": ...}` ile dönerken HTTP status kodu 200 oluyordu.
+
+**Çözüm:**
+- `backend/routes/query.py`: `asyncio.wait_for(timeout=120)` (AGENT_TIMEOUT)
+- `backend/routes/fetch_data.py`: `asyncio.wait_for(timeout=60)` (FETCH_TIMEOUT)
+- `backend/routes/compare.py`: yfinance fetch 60s, agent 120s timeout
+- `backend/routes/portfolio.py`: yfinance fetch 60s, agent 120s timeout
+- Tüm validation hataları `HTTPException(status_code=400/422)` ile döner
+- `TimeoutError` → 504 Gateway Timeout, `Exception` → 500 Internal Server Error
+
+---
+
+### Adım 5 — DB Bağlantı Leak Önleme
+
+**Sorun:** `compare.py` ve `portfolio.py`'de SQLite bağlantıları exception durumunda kapatılmıyordu.
+
+**Çözüm:**
+- Tüm SQLite bağlantıları `try/finally: conn.close()` pattern'i ile sarıldı
+- Exception olsa bile bağlantı her zaman kapatılır
+
+---
+
+### Sprint 1 Çıktı Kriterleri ✅
+
+- ✅ Git geçmişinden API key'ler temizlendi
+- ✅ Tüm API key'ler rotate edildi (eski key'ler silindi)
+- ✅ Firebase Auth production'da güvenli
+- ✅ Qdrant hatalarında crash olmuyor (boş liste döner)
+- ✅ Tüm endpoint'lerde timeout var
+- ✅ DB bağlantı leak'leri kapatıldı
+- ✅ `.env.example` şablonları oluşturuldu
+
+---
+
+## 2026-07-27 — Pazartesi
+**Sprint 2 — Test Altyapısı, CI/CD, Logging, Input Validation**
+
+Sprint 1'deki güvenlik düzeltmeleri sonrası kalite ve sürdürülebilirlik altyapısı kuruldu.
+
+---
+
+### Adım 1 — Test Altyapısı (pytest)
+
+**Yapılanlar:**
+- `pyproject.toml`'a dev bağımlılıkları eklendi: `pytest>=8.0`, `pytest-asyncio>=0.24`, `httpx>=0.28`
+- `[tool.pytest.ini_options]` ile `asyncio_mode = "auto"` ve `testpaths = ["tests"]` ayarlandı
+- `tests/conftest.py` oluşturuldu: `TestClient` fixture + dev auth bypass header
+
+**Test dosyaları:**
+- `tests/test_health.py` — Health endpoint: 200 status, `status=ok`, `version` alanı
+- `tests/test_auth.py` — Dev mode mock user (`uid=dev-user`, `email=dev@localhost`) + production mode `RuntimeError`
+- `tests/test_validation.py` — 12 input validation testi:
+  - Boş soru → 400, eksik soru → 422
+  - Boş ticker → 400
+  - Tek ticker karşılaştırma → 400, 6+ ticker → 400
+  - Boş portföy holdings → 400, boş portföy sorusu → 400
+  - Portföy ticker'sız → 400, portföy haberleri ticker'sız → 400
+  - Geçersiz ticker upload → 400 ("Geçersiz ticker" mesajı)
+  - PDF olmayan dosya upload → 400
+
+**Sonuç:** `uv run pytest tests/ -v` → 14 test, tümü geçiyor ✅
+
+---
+
+### Adım 2 — GitHub Actions CI/CD Pipeline
+
+**`.github/workflows/ci.yml` oluşturuldu:**
+
+**Tetikleyici:** Push veya PR → `main` branch
+
+**Job 1 — test (Backend):**
+1. `actions/checkout@v4`
+2. `astral-sh/setup-uv@v4` ile uv kurulumu
+3. `uv python install 3.12`
+4. `uv sync --extra dev`
+5. `uv run pytest tests/ -v` (ENVIRONMENT=development, test API key'leri ile)
+
+**Job 2 — frontend-build (Frontend):**
+1. `actions/setup-node@v4` (Node.js 20, npm cache)
+2. `npm ci` (frontend/)
+3. `npx tsc --noEmit` (TypeScript tip kontrolü)
+4. `npm run build` (Vite production build, test Firebase config ile)
+
+---
+
+### Adım 3 — print() → logging Migrasyonu
+
+**Değiştirilen dosyalar:**
+- `backend/main.py` — `logging.basicConfig()` merkezi config eklendi
+- `backend/routes/query.py` — logger
+- `backend/routes/fetch_data.py` — logger
+- `backend/routes/compare.py` — logger
+- `backend/routes/portfolio.py` — logger
+- `backend/routes/upload.py` — logger
+- `backend/services/pdf_pipeline.py` — logger
+- `src/agent/router_node.py` — 3 print → logger
+- `src/retrievers/sql_retriever.py` — print → logger.debug
+- `src/retrievers/news_retriever.py` — print → logger.info
+- `src/ingestion/bist_finance_client.py` — ~15 print → logger
+- `src/ingestion/news_client.py` — print → logger (kütüphane kodu)
+- `src/ingestion/build_vector_index.py` — print → logger + os.environ.get()
+- `src/ingestion/pdf_chunker.py` — print → logger (kütüphane kodu)
+
+**Kalan:** `src/cli_test.py`'de 6 print — standalone CLI aracı, düşük öncelik.
+
+---
+
+### Adım 4 — Input Validation Güçlendirme
+
+**`backend/routes/upload.py` yeniden yazıldı:**
+- `VALID_TICKERS` set (30 BIST-30 hissesi) — whitelist validation
+- `MAX_FILE_SIZE = 50 * 1024 * 1024` (50 MB limit)
+- `SAFE_FILENAME_RE = re.compile(r"^[\w\-. ]+$")` — path injection önleme
+- `_validate_ticker()` ve `_validate_file()` helper fonksiyonları
+- Dosya içeriği okunup boyut kontrolü yapılır
+- Tüm hatalar `HTTPException(status_code=400)` ile döner
+
+**Diğer endpoint'ler:**
+- Tüm `return {"error": ...}` ifadeleri `HTTPException` ile değiştirildi
+- Karşılaştırma: min 2, max 5 ticker validasyonu
+- Portföy: boş holdings, boş soru, boş tickers validasyonu
+- Named constants: `HOLDING_CONCENTRATION_THRESHOLD = 30`, `SECTOR_CONCENTRATION_THRESHOLD = 40`
+
+---
+
+### Sprint 2 Çıktı Kriterleri ✅
+
+- ✅ 14 pytest testi — tümü geçiyor
+- ✅ GitHub Actions CI/CD — her push/PR'da otomatik test + build
+- ✅ Tüm kütüphane kodu print → logging'e migrate edildi
+- ✅ Ticker whitelist (30 BIST-30)
+- ✅ 50MB dosya boyutu limiti
+- ✅ Güvenli dosya adı regex
+- ✅ Tüm endpoint'lerde HTTPException ile doğru HTTP status kodları
+
+---
+
+### Dokümantasyon Güncellemesi
+
+- `dokuman.md` güncellendi: Sprint 1 + Sprint 2 çalışmaları eklendi, teknoloji stack'e test/CI/CD/logging eklendi, klasör yapısı güncellendi
+- `mimari.md` güncellendi: Güvenlik katmanları, test altyapısı, CI/CD bölümleri eklendi, implementation durumu tablosu güncellendi
+- `daily_log.md` güncellendi (bu kayıt)
+- `README.md` yeniden yazıldı: UI ekran görüntüsü, badge'ler, güvenlik/kalite bölümü, güncel proje yapısı
+
+---
+
+### Sıradaki
+
+- [ ] Deployment (Railway + Vercel)
+- [ ] Custom domain (agentick.io)
+- [ ] Rate limiting
+- [ ] Otomatik Screening/Alert

@@ -6,6 +6,7 @@ PDF Pipeline — Yüklenen PDF'i işler:
 """
 
 import asyncio
+import logging
 import sqlite3
 from pathlib import Path
 from datetime import datetime
@@ -14,6 +15,8 @@ import pdfplumber
 
 from src.ingestion.build_vector_index import build_index
 from src.ingestion.bist_finance_client import fetch_and_store
+
+logger = logging.getLogger(__name__)
 
 DB_PATH = Path("data/bist_financials.db")
 
@@ -111,6 +114,7 @@ async def process_pdf(pdf_path: Path, ticker: str) -> dict:
         await asyncio.to_thread(build_index, ticker, pdf_path)
         result["chunks_indexed"] = True
     except Exception as e:
+        logger.error("Qdrant index hatası (%s): %s", ticker, e)
         result["chunks_indexed"] = False
         result["index_error"] = str(e)
 
@@ -119,6 +123,7 @@ async def process_pdf(pdf_path: Path, ticker: str) -> dict:
         await asyncio.to_thread(fetch_and_store, ticker)
         result["yfinance_updated"] = True
     except Exception as e:
+        logger.error("yfinance güncelleme hatası (%s): %s", ticker, e)
         result["yfinance_updated"] = False
         result["yfinance_error"] = str(e)
 

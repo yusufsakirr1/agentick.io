@@ -7,13 +7,15 @@ Kullanım:
     from src.ingestion.news_client import fetch_news_if_stale, search_news, cleanup_old_news
 """
 
+import logging
 import sqlite3
-import time
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import feedparser
+
+logger = logging.getLogger(__name__)
 
 DB_PATH = Path("data/bist_financials.db")
 
@@ -151,7 +153,7 @@ def fetch_news_if_stale() -> int:
                     # link UNIQUE constraint — duplicate, atla
                     pass
         except Exception as e:
-            print(f"  RSS fetch hatası ({source_name}): {e}")
+            logger.error("RSS fetch hatası (%s): %s", source_name, e)
 
     conn.commit()
     conn.close()
@@ -209,6 +211,7 @@ def search_news(ticker: str | None = None, query: str = "", top_k: int = 5) -> l
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     print("Haber çekiliyor...")
     count = fetch_news_if_stale()
     print(f"  {count} yeni haber eklendi.")

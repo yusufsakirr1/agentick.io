@@ -6,9 +6,9 @@ Kullanım:
     results = search("THYAO'nun son 3 yılda net marjı nasıl değişti?", ticker="THYAO")
 """
 
+import logging
 import os
 import sqlite3
-import json
 import re
 from pathlib import Path
 
@@ -16,6 +16,8 @@ import anthropic
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 DB_PATH = Path("data/bist_financials.db")
 
@@ -175,7 +177,7 @@ def search(question: str, ticker: str = "THYAO", top_k: int = 5) -> list[dict]:
         return []
 
     sql = _generate_sql(question, ticker)
-    print(f"  Üretilen SQL: {sql}")
+    logger.debug("Üretilen SQL: %s", sql)
 
     rows = _run_sql(sql)
     text = _rows_to_text(rows, ticker, sql)
