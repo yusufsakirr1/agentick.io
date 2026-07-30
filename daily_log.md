@@ -1396,3 +1396,251 @@ Sprint 1'deki güvenlik düzeltmeleri sonrası kalite ve sürdürülebilirlik al
 - [ ] Custom domain (agentick.io)
 - [ ] Rate limiting
 - [ ] Otomatik Screening/Alert
+
+---
+
+## 2026-07-28 — Salı
+**Sprint 3 / Gün 1 — Kapsamlı Denetim + Backend Güvenlik Düzeltmeleri**
+
+Projenin tamamı (89 dosya, ~6.200 satır kod + 4 doküman) baştan sona okundu.
+Kod ile doküman arasındaki uyuşmazlıklar ve gerçek bug'lar çıkarıldı; bu gün
+backend tarafındaki güvenlik ve veri bütünlüğü sorunları giderildi.
+
+**Denetimde çıkan tablo:** 6 doküman-kod uyuşmazlığı + 8 gerçek risk.
+Bunlardan üçü kritikti: Qdrant'ta sessiz veri kaybı, auth'un fail-open olması ve
+LLM'in ürettiği SQL'in doğrudan çalıştırılması.
+
+---
+
+### Adım 1 — Qdrant Point ID Çakışması (veri kaybı)
+
+**Sorun:** `build_vector_index.upload_to_qdrant()` point ID olarak `0, 1, 2, ...`
+sıra numarası kullanıyordu. THYAO yüklenip ardından TUPRS yüklendiğinde aynı ID'ler
+üretiliyor ve THYAO'nun chunk'ları **sessizce üzerine yazılıyordu**. Yani ikinci
+PDF'ten sonra ilk şirketin vektör verisi kayboluyordu.
+
+**Çözüm:**
+- `uuid.uuid5(POINT_NAMESPACE, f"{ticker}|{source_file}|{chunk_index}")` ile
+  deterministik, çakışmayan ID üretimi
+- `chunk_index` payload'a eklendi (mimari.md'de yazıyordu ama kodda yoktu)
+- `delete_existing_chunks()`: aynı dosya yeniden yüklenirse eski chunk'lar
+  ticker + source_file filtresiyle silinir (kısalan raporda artık kalıntı kalmaz)
+- `source_file` için keyword payload index eklendi (filtreli silme için)
+- Doğrulama: `_point_id('THYAO','a.pdf',0)` ve `_point_id('TUPRS','a.pdf',0)`
+  farklı UUID üretiyor ✅
+
+---
+
+### Adım 2 — Auth Fail-Open
+
+**Sorun:** `os.getenv("ENVIRONMENT", "development")` — ortam değişkeni tanımsızsa
+dev mode'a düşüyor ve **tüm token'lar kabul ediliyordu**. Projenin `.env` dosyasında
+`ENVIRONMENT` hiç tanımlı değildi; bu haliyle deploy edilse API tamamen açık olurdu.
+
+**Çözüm:**
+- Varsayılan `production` yapıldı (fail-safe)
+- Dev bypass yalnızca `development / dev / local / test` değerlerinde açılır;
+  `staging`, `prod`, `canary` gibi bilinmeyen adlar production gibi davranır
+- `init_auth()` FastAPI lifespan'inde çağrılıyor → yanlış yapılandırmada servis
+  hiç ayağa kalkmıyor (her istekte 500 yerine)
+- `load_dotenv()` auth ve main modüllerine eklendi (import sırasına bağımlılık kalktı)
+- `.env` dosyasına `ENVIRONMENT=development` eklendi (yerel geliştirme bozulmasın)
+
+---
+
+### Adım 3 — Text-to-SQL Güvenliği
+
+**Sorun:** `_run_sql()` LLM'in ürettiği SQL'i doğrudan `conn.execute()` ile
+çalıştırıyordu. Yüklenen PDF içeriği veya kullanıcı sorusu üzerinden prompt
+injection ile `DELETE FROM ratios` gibi bir sorgu üretilmesi mümkündü.
+
+**Çözüm:**
+- `_validate_sql()`: yalnızca tek bir `SELECT`/`WITH`; `;`, `--`, `/* */` ve
+  `INSERT/UPDATE/DELETE/DROP/ALTER/CREATE/REPLACE/TRUNCATE/ATTACH/PRAGMA/VACUUM`
+  içeren sorgular reddedilir
+- Bağlantı salt-okunur açılıyor: `sqlite3.connect("file:...?mode=ro", uri=True)` —
+  guard atlansa bile yazma imkânsız
+- `DB_SCHEMA`'ya `ratios.sector` kolonu eklendi (DB'de vardı ama LLM'e gösterilmiyordu,
+  bu yüzden agent sektör sorularını SQL'e çeviremiyordu)
+
+---
+
+### Adım 4 — CORS, Ticker Whitelist ve Rate Limiting
+
+**Sorun:** CORS sadece localhost'a izin veriyordu (deployment blocker); ticker
+whitelist'i yalnızca upload endpoint'inde vardı; hiçbir kota yoktu — her `/api/ask`
+4+ LLM çağrısı tetikliyor.
+
+**Çözüm:**
+- `backend/constants.py` oluşturuldu: `VALID_TICKERS` + `validate_ticker()` +
+  `validate_tickers()`. Tek kaynak; ask, fetch-data, compare/metrics, compare/ask,
+  portfolio/metrics, portfolio/ask, portfolio/news, news/search uçlarının hepsinde uygulanıyor
+- `backend/rate_limit.py` oluşturuldu: kullanıcı (uid) başına kayan pencere,
+  dakika + gün limiti, aşımda 429 + `Retry-After`, bellek sızıntısına karşı periyodik sweep
+- `backend/main.py`: CORS listesi `CORS_ORIGINS` env'inden okunuyor, `"*"` reddediliyor;
+  kullanılmayan `StaticFiles`/`Path` import'ları temizlendi; sürüm 0.4.0
+
+---
+
+### Adım 5 — Haber Aramasında Genel Fallback
+
+**Sorun:** `news_retriever.search()` ticker filtresi boş dönünce **filtresiz genel
+arama** yapıyordu; şirketle ilgisi olmayan haberler synthesizer'a gidiyordu.
+
+**Çözüm:** `news_client.search_news_for_ticker()` ortak helper'ı yazıldı:
+ticker etiketi → şirket anahtar kelimeleri (`KNOWN_TICKERS`) sırası, genel arama yok.
+`news_retriever`, `/api/portfolio/news` ve `/api/news/search` aynı helper'ı kullanıyor
+(portfolio.py'deki kopya mantık kaldırıldı).
+
+---
+
+### Adım 6 — Dosya Adı Doğrulaması
+
+**Sorun:** `^[a-zA-Z0-9_\-\.]+$` regex'i boşluklu ve Türkçe karakterli dosya adlarını
+reddediyordu (KAP raporları genelde böyle). Path traversal koruması da regex'e bağlıydı.
+
+**Çözüm:** `_safe_filename()`:
+- `Path(name).name` ile dizin bileşenleri atılır → traversal etkisiz
+- `..` içeren adlar reddedilir
+- `^[\w\-. ()]+$` (Unicode `\w` Türkçe harfleri kapsar)
+- `.pdf` uzantısı + `%PDF` magic byte kontrolü, 200 karakter ad sınırı, boş dosya reddi
+
+---
+
+### Gün 1 Çıktıları
+
+- ✅ Qdrant veri kaybı bug'ı kapatıldı (deterministik uuid5 point ID)
+- ✅ Auth fail-safe: `ENVIRONMENT` tanımsızsa production, startup'ta doğrulama
+- ✅ Text-to-SQL guard + salt-okunur DB bağlantısı
+- ✅ CORS env'den yönetiliyor, rate limiting devrede
+- ✅ Ticker whitelist tüm uçlarda (`backend/constants.py` tek kaynak)
+- ✅ Haber aramasında filtresiz genel fallback kaldırıldı
+- ✅ Dosya adı doğrulaması: traversal etkisiz, Türkçe/boşluklu adlar kabul
+
+**Yarına kalan:** frontend bug'ları (portföy metrik tazeleme, sohbet hafızası).
+
+---
+
+## 2026-07-29 — Çarşamba
+**Sprint 3 / Gün 2 — Frontend Düzeltmeleri**
+
+Gün 1'de backend tarafı kapatıldı. Bugün frontend'de kalan iki bug giderildi:
+portföy metriklerinin lot/maliyet değişiminde tazelenmemesi ve hiç bağlanmamış
+sohbet hafızası.
+
+---
+
+### Adım 1 — Portföy Metrikleri Tazelenmiyordu
+
+**Sorun:** `PortfolioPage` useEffect bağımlılığı `[holdings.length]` idi; lot veya
+maliyet düzenlendiğinde (eleman sayısı değişmediği için) metrikler eski kalıyordu.
+
+**Çözüm:** İçeriğe duyarlı `holdingsKey` (`ticker:shares:avgCost` birleşimi) bağımlılığı.
+
+---
+
+### Adım 2 — Sohbet Hafızası Geri Bağlandı
+
+**Sorun:** `conversationStorage.ts` (90 satır) yazılmıştı ama **hiçbir yerden import
+edilmiyordu**. Faz 4'teki sayfa ayrımında Sidebar'ın konuşma listesi düşmüş; sohbetler
+sadece bellekte tutuluyor, sayfa yenilenince kayboluyordu — oysa dokümanlar kalıcı
+hafızayı özellik olarak sayıyordu.
+
+**Çözüm:**
+- `App.tsx`: `conversations` + `activeId` state'i, localStorage senkronu
+  (`upsert`/`getAll`/`remove`), ticker değişiminde konuşma güncellemesi
+- `Sidebar.tsx`: "Yeni Sohbet" butonu + tarih grupli konuşma listesi
+  (Bugün / Dün / Bu Hafta / Daha Önce), ticker rozeti, hover'da silme
+- Agent yanıtı, sorunun sorulduğu konuşma nesnesine yazılıyor — kullanıcı yanıt
+  beklerken başka sohbete geçse bile cevap doğru yere düşüyor
+
+---
+
+### Gün 2 Çıktıları
+
+- ✅ Portföy metrikleri lot/maliyet düzenlemesinde de tazeleniyor
+- ✅ Sohbet hafızası kalıcı: konuşmalar localStorage'da, Sidebar'da tarih grupli liste
+- ✅ Yeni sohbet başlatma ve konuşma silme çalışıyor
+- ✅ `npx tsc --noEmit` hatasız
+
+**Yarına kalan:** test paketinin genişletilmesi ve dört dokümanın koda göre
+güncellenmesi (özellikle sentez modeli uyuşmazlığı).
+
+---
+
+## 2026-07-30 — Perşembe
+**Sprint 3 / Gün 3 — Test Paketi ve Dokümantasyon**
+
+Kod tarafı iki günde kapandı. Bugün regresyon güvencesi için test paketi
+14'ten 73'e çıkarıldı ve dört doküman kodla birebir uyumlu hale getirildi.
+
+---
+
+### Adım 1 — Model Uyuşmazlığı (doküman ↔ kod)
+
+`synthesizer_node.py` Claude Haiku 4.5 kullanıyordu; README, mimari.md ve dokuman.md
+"Claude Sonnet 4.6" diyordu. Maliyet tercihi bilinçli olduğu için **dokümanlar koda
+göre düzeltildi**. Ayrıca haber cache süresi (30 gün → 1 saat TTL / 7 gün saklama) ve
+RSS kaynağı (tek kaynak: Bloomberg HT) gerçek değerlerle güncellendi.
+
+---
+
+### Adım 2 — Testler
+
+**Yeni test dosyaları:**
+- `tests/test_sql_guard.py` — SELECT/WITH kabul, DDL/DML ve çoklu ifade reddi,
+  reddedilen sorgunun DB'ye hiç gitmediği, bağlantının gerçekten salt-okunur olduğu
+- `tests/test_rate_limit.py` — dakika/gün limiti, kullanıcı bazlı izolasyon,
+  0 ile kapatma, 429 + Retry-After
+- `tests/test_upload_security.py` — traversal etkisizleştirme, boşluk/Türkçe karakter
+  kabulü, uzantı/uzunluk/shell karakteri reddi
+
+**Genişletilenler:**
+- `test_auth.py` — fail-safe davranışı (ENVIRONMENT tanımsız, bilinmeyen ortam adları)
+- `test_validation.py` — tüm uçlarda BIST-30 dışı ticker reddi
+- `conftest.py` — rate limit testlerde kapalı, her testten sonra state reset
+
+**Sonuç:** `uv run pytest tests/ -q` → **73 test, tümü geçiyor** (önceki 14)
+`npx tsc --noEmit` → hatasız, `npm run build` → başarılı
+
+---
+
+### Not: Test Beklentisi Düzeltmesi
+
+`test_rejects_traversal` ilk yazılışında `../../etc/passwd.pdf` girdisinin hata
+fırlatmasını bekliyordu. Kod bunu reddetmek yerine taban adı alıp `passwd.pdf`
+döndürüyor — bu zaten doğru ve güvenli davranış (dosya `data/raw` dışına çıkamıyor).
+Test, gerçek davranışı doğrulayacak şekilde `test_traversal_is_neutralised` olarak
+yeniden yazıldı; `..` içeren adlar için ayrı bir red testi eklendi.
+
+---
+
+### Adım 3 — Dokümantasyon Güncellemesi
+
+- `README.md`: badge'ler (Haiku 4.5, 73 test), mimari diyagramı, stack tablosu,
+  güvenlik/kalite bölümü, proje yapısı, RSS kaynağı, sohbet hafızası açıklaması
+- `mimari.md`: güvenlik katmanları (CORS → Auth → Rate Limit → Validation → Timeout →
+  SQL Guard → DB Safety → Logging), Qdrant point ID stratejisi, haber arama sırası,
+  App.tsx state modeli, Sidebar hiyerarşisi, test/CI bölümü, implementasyon durumu
+- `dokuman.md`: Sprint 3 bulgu-çözüm tablosu, klasör yapısı, deployment öncesi
+  zorunlu env ayarları, bilinen sınırlar
+- `daily_log.md`: bu kayıt
+
+---
+
+### Sprint 3 Çıktı Kriterleri ✅
+
+- ✅ Denetimde çıkan 10 sorunun tamamı giderildi
+- ✅ 73 pytest testi, tümü geçiyor (önceki 14)
+- ✅ `npx tsc --noEmit` hatasız, `npm run build` başarılı
+- ✅ Dört doküman kodla birebir uyumlu hale getirildi
+
+---
+
+### Sıradaki
+
+- [ ] Deployment (Railway + Vercel) — `ENVIRONMENT=production`, `FIREBASE_PRIVATE_KEY`,
+      `CORS_ORIGINS` zorunlu
+- [ ] Custom domain (agentick.io)
+- [ ] Çok instance'lı deploy için rate limit sayaçlarını Redis'e taşıma
+- [ ] Otomatik Screening/Alert

@@ -8,7 +8,8 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from backend.auth import get_current_user
+from backend.constants import validate_ticker
+from backend.rate_limit import enforce_rate_limit
 
 from src.ingestion.bist_finance_client import fetch_and_store
 
@@ -24,10 +25,8 @@ class FetchRequest(BaseModel):
 
 
 @router.post("/fetch-data")
-async def fetch_data(request: FetchRequest, current_user: dict = Depends(get_current_user)):
-    ticker = request.ticker.upper().strip()
-    if not ticker:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ticker boş olamaz.")
+async def fetch_data(request: FetchRequest, current_user: dict = Depends(enforce_rate_limit)):
+    ticker = validate_ticker(request.ticker)
 
     try:
         await asyncio.wait_for(

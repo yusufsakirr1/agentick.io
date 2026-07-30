@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import AgentLogo from '../components/AgentLogo'
 import PortfolioManager from '../components/PortfolioManager'
 import PortfolioSummaryCards from '../components/PortfolioSummaryCards'
@@ -88,9 +88,18 @@ export default function PortfolioPage() {
     }
   }, [holdings])
 
+  // Holding içeriğine duyarlı anahtar: lot veya maliyet değişince de metrikler tazelenir
+  // (sadece eleman sayısına bakmak, aynı sayıda kalan düzenlemeleri kaçırıyordu)
+  const holdingsKey = useMemo(
+    () => holdings.map(h => `${h.ticker}:${h.shares}:${h.avgCost}`).join('|'),
+    [holdings],
+  )
+
   useEffect(() => {
     if (holdings.length > 0) loadMetrics()
-  }, [holdings.length]) // sadece eleman sayısı değiştiğinde
+    // loadMetrics bilerek bağımlılığa eklenmedi — holdingsKey değişimi tek tetikleyici
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [holdingsKey])
 
   const handleAdd = (holding: Holding) => {
     saveHoldings([...holdings, holding])

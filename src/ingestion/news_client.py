@@ -210,6 +210,39 @@ def search_news(ticker: str | None = None, query: str = "", top_k: int = 5) -> l
     return rows
 
 
+def search_news_for_ticker(ticker: str, query: str = "", top_k: int = 5) -> list[dict]:
+    """
+    Bir hisseye ait haberleri döndürür.
+
+    Sıra:
+      1. Ticker etiketi + sorgu kelimeleri (varsa)
+      2. Sonuç yoksa sadece ticker etiketi
+      3. Sonuç yoksa şirket anahtar kelimeleriyle başlık/özet araması
+
+    Filtresiz genel arama YAPILMAZ — böylece şirketle ilgisi olmayan
+    haberler agent'a veya portföy akışına sızmaz.
+    """
+    ticker = (ticker or "").upper().strip()
+    if not ticker:
+        return []
+
+    if query:
+        articles = search_news(ticker=ticker, query=query, top_k=top_k)
+        if articles:
+            return articles
+
+    articles = search_news(ticker=ticker, query="", top_k=top_k)
+    if articles:
+        return articles
+
+    for keyword in KNOWN_TICKERS.get(ticker, []):
+        articles = search_news(ticker=None, query=keyword, top_k=top_k)
+        if articles:
+            return articles
+
+    return []
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     print("Haber çekiliyor...")

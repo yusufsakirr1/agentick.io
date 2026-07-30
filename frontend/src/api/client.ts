@@ -48,6 +48,7 @@ export interface TickerMetrics {
   total_debt: number | null
   ratios_date: string | null
   income_date: string | null
+  sector: string | null
 }
 
 export interface ComparisonMetrics {

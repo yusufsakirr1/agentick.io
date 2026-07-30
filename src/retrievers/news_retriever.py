@@ -8,7 +8,9 @@ Kullanım:
 
 import logging
 
-from src.ingestion.news_client import fetch_news_if_stale, cleanup_old_news, search_news
+from src.ingestion.news_client import (
+    fetch_news_if_stale, cleanup_old_news, search_news_for_ticker,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,11 +55,9 @@ def search(query: str, ticker: str = "THYAO", top_k: int = 5) -> list[dict]:
     # 2. Eski haberleri temizle
     cleanup_old_news()
 
-    # 3. SQLite'tan ara — önce ticker filtreli, sonuç yoksa genel arama
-    articles = search_news(ticker=ticker, query=query, top_k=top_k)
-    if not articles and ticker:
-        articles = search_news(ticker=None, query=query, top_k=top_k)
-
+    # 3. SQLite'tan ara — sadece bu hisseyle ilgili haberler
+    #    (filtresiz genel arama yapılmaz, alakasız haber synthesizer'a gitmesin)
+    articles = search_news_for_ticker(ticker, query=query, top_k=top_k)
     if not articles:
         return []
 

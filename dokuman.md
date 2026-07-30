@@ -18,8 +18,7 @@ Her oturuma bu dosyayı atarak nereden devam edeceğimizi belirleriz.
 
 | Katman | Teknoloji | Durum |
 |---|---|---|
-| LLM (Sentez) | Claude Sonnet 4.6 | Aktif |
-| LLM (Planner/Critic/SQL) | Claude Haiku 4.5 | Aktif |
+| LLM (Planner/Critic/SQL/Sentez) | Claude Haiku 4.5 | Aktif |
 | Agent Orkestrasyonu | LangGraph | Aktif |
 | Embedding | paraphrase-multilingual-mpnet-base-v2 (lokal) | Aktif |
 | Vektör DB | Qdrant Cloud (EU-Central-1) | Aktif |
@@ -32,7 +31,7 @@ Her oturuma bu dosyayı atarak nereden devam edeceğimizi belirleriz.
 | Routing (Frontend) | react-router-dom v7 | Aktif |
 | İkonlar | lucide-react | Aktif |
 | Gözlemlenebilirlik | LangSmith | Aktif |
-| Test | pytest + pytest-asyncio (14 test) | Aktif |
+| Test | pytest + pytest-asyncio (73 test) | Aktif |
 | CI/CD | GitHub Actions (test + build) | Aktif |
 | Logging | Python logging modülü (structured) | Aktif |
 
@@ -43,8 +42,10 @@ Her oturuma bu dosyayı atarak nereden devam edeceğimizi belirleriz.
 ```
 agentick.io/
 ├── backend/
-│   ├── main.py                   # FastAPI app + logging config
-│   ├── auth.py                   # Firebase Auth + dev mode bypass (production-safe)
+│   ├── main.py                   # FastAPI app + CORS (env) + logging + startup auth init
+│   ├── auth.py                   # Firebase Auth (fail-safe: ENVIRONMENT tanımsız → production)
+│   ├── constants.py              # BIST-30 whitelist + ticker doğrulama (tek kaynak)
+│   ├── rate_limit.py             # Kullanıcı başına kayan pencere kotası (429)
 │   ├── routes/
 │   │   ├── upload.py             # POST /api/upload (ticker whitelist, 50MB limit, safe filename)
 │   │   ├── query.py              # POST /api/ask (120s timeout)
@@ -110,10 +111,13 @@ agentick.io/
 │           ├── conversationStorage.ts
 │           └── portfolioService.ts   # Firestore portföy CRUD
 ├── tests/
-│   ├── conftest.py               # Shared fixtures (TestClient + auth bypass)
+│   ├── conftest.py               # Shared fixtures (TestClient + state reset)
 │   ├── test_health.py            # Health endpoint testi
-│   ├── test_auth.py              # Auth middleware testleri (dev mode + production mode)
-│   └── test_validation.py        # 12 input validation testi
+│   ├── test_auth.py              # Fail-safe auth testleri
+│   ├── test_validation.py        # Input validation + ticker whitelist testleri
+│   ├── test_sql_guard.py         # Text-to-SQL güvenlik testleri
+│   ├── test_rate_limit.py        # Kota testleri
+│   └── test_upload_security.py   # Dosya adı / path traversal testleri
 ├── .github/
 │   └── workflows/
 │       └── ci.yml                # CI/CD: pytest + frontend build
@@ -143,10 +147,34 @@ agentick.io/
 | 6 | Portföy Dashboard + Bedelsiz Sermaye Artırımı | ✅ |
 | Sprint 1 | Güvenlik Sertleştirme (API key temizliği, auth fix, timeout, connection leak) | ✅ |
 | Sprint 2 | Test Altyapısı + CI/CD + Logging + Input Validation | ✅ |
+| Sprint 3 | Denetim Bulgularının Düzeltilmesi (auth fail-safe, SQL guard, Qdrant ID, rate limit, sohbet hafızası) | ✅ |
 
 ---
 
-## Son Durum (Sprint 2 sonrası)
+## Sprint 3 — Düzeltilen Bug'lar (2026-07-28 – 2026-07-30)
+
+Kapsamlı kod/doküman denetimi sonrası tespit edilen 10 sorun giderildi.
+
+| # | Sorun | Çözüm |
+|---|---|---|
+| 1 | **Qdrant point ID çakışması** — `id=idx` yüzünden ikinci PDF ilkinin chunk'larını eziyordu (veri kaybı) | `uuid5(namespace, ticker\|dosya\|index)` + yükleme öncesi filtreli silme + `chunk_index` payload |
+| 2 | **Auth fail-open** — `ENVIRONMENT` tanımsızsa dev bypass açılıyordu | Varsayılan `production`; bypass yalnızca development/dev/local/test; startup'ta `init_auth()` |
+| 3 | **LLM'in ürettiği SQL doğrudan çalışıyordu** | SELECT-only guard (tek ifade, yorum/DDL/DML yasak) + salt-okunur bağlantı |
+| 4 | **CORS sadece localhost, kota yok** | `CORS_ORIGINS` env; kullanıcı başına dakika+gün rate limit (429 + Retry-After) |
+| 5 | **Ticker whitelist sadece upload'da vardı** | `backend/constants.py` tek kaynak; ask/fetch-data/compare/portfolio/news uçlarının hepsinde |
+| 6 | **Haber aramada filtresiz genel fallback** — alakasız haberler agent'a gidiyordu | `search_news_for_ticker()`: ticker etiketi → şirket keyword'leri; genel arama yok |
+| 7 | **Dosya adı regex'i boşluk/Türkçe karakter reddediyordu**, `..` koruması zayıftı | Taban ad alınır (traversal etkisiz), `[\w\-. ()]+` regex, `%PDF` magic byte kontrolü |
+| 8 | **Portföy metrikleri lot/maliyet değişiminde tazelenmiyordu** (`[holdings.length]`) | İçeriğe duyarlı `holdingsKey` bağımlılığı |
+| 9 | **`conversationStorage.ts` hiç kullanılmıyordu** — sohbet sayfa yenilenince kayboluyordu | App.tsx localStorage senkronu + Sidebar'da tarih grupli konuşma listesi |
+| 10 | **Doküman "Sonnet 4.6" diyordu, kod Haiku 4.5 kullanıyordu** | Dokümanlar koda göre düzeltildi (maliyet tercihi bilinçli) |
+
+Ek düzeltmeler: `ratios.sector` SQL şemasına eklendi (agent artık sektör sorgulayabiliyor),
+embedding modeli indexleme ve arama arasında ortak singleton yapıldı (RAM'de tek kopya),
+`backend/main.py`'deki kullanılmayan import'lar temizlendi.
+
+---
+
+## Son Durum (Sprint 3 sonrası)
 
 ### Çalışan Özellikler
 - LangGraph agent: Planner → Router → Critic → Synthesizer döngüsü
@@ -157,7 +185,8 @@ agentick.io/
 - **Sektör verisi:** ratios tablosunda `sector` kolonu (yfinance info.sector)
 - **Auto-fetch:** SQL boş dönünce otomatik yfinance'den çekip tekrar sorgulama
 - PDF upload → tablo çıkarma + metin indexleme + yfinance güncelleme
-- Sohbet hafızası (localStorage + API)
+- **Sohbet hafızası:** konuşmalar localStorage'da kalıcı, Sidebar'da tarih grupli liste
+  (Bugün / Dün / Bu Hafta / Daha Önce), yeni sohbet + silme
 - BIST-30 tam destek
 - LangSmith tracing
 - **Çoklu şirket karşılaştırma:** `/compare` sayfasında 2 hisseyi yan yana karşılaştırma
@@ -171,7 +200,23 @@ agentick.io/
 - **Portföy Dashboard:** Firestore'da portföy saklama, per-holding metrikler, sektör dağılımı (CSS bar chart), konsantrasyon uyarıları, temettü takvimi (Türkçe tarih), portföy haberleri, AI soru-cevap
 - **Haber arama iyileştirmesi:** OR → AND keyword araması (alakasız haber önleme)
 
-### Güvenlik ve Kalite (Sprint 1 + Sprint 2)
+### Güvenlik ve Kalite (Sprint 1 + 2 + 3)
+
+- **Fail-safe auth:** `ENVIRONMENT` tanımsızsa production varsayılır; dev bypass yalnızca
+  development/dev/local/test değerlerinde açılır. Yanlış yapılandırmada servis startup'ta durur.
+- **Text-to-SQL guard:** Yalnızca tek `SELECT`/`WITH`; çoklu ifade, yorum ve tüm DDL/DML
+  ifadeleri reddedilir. SQLite bağlantısı salt-okunur (`mode=ro`).
+- **Rate limiting:** Kullanıcı başına dakika ve gün penceresi (`RATE_LIMIT_PER_MIN`,
+  `RATE_LIMIT_PER_DAY`), aşımda 429 + `Retry-After`. Süreç içi sayaç — çok instance'lı
+  deploy'da Redis'e taşınmalı.
+- **CORS:** `CORS_ORIGINS` ortam değişkeninden; `"*"` reddedilir (allow_credentials aktif).
+- **Ticker whitelist:** `backend/constants.py` tek kaynak, tüm uçlarda uygulanır.
+- **Dosya güvenliği:** taban ad alınır (path traversal etkisiz), `%PDF` magic byte kontrolü,
+  50 MB limiti, ad uzunluğu sınırı.
+- **Qdrant veri bütünlüğü:** deterministik `uuid5` point ID + yeniden yüklemede eski
+  chunk'ların filtreli silinmesi.
+
+
 - **API key temizliği:** git geçmişinden `.env` dosyaları `git filter-repo` ile silindi, tüm API key'ler rotate edildi
 - **Firebase Auth production-safe:** Production'da `FIREBASE_PRIVATE_KEY` yoksa `RuntimeError` fırlatır, hata mesajından internal detay sızması engellendi
 - **Qdrant hata toleransı:** Singleton client (thread-safe), bağlantı hatalarında boş liste döner (crash etmez)
@@ -246,4 +291,24 @@ ChatGPT genel amaçlı — agentick BIST'e özel. Fark yaratan özellikler:
 
 ## Devam Edilecek Yer
 
-Sprint 1 ve Sprint 2 tamamlandı. Tüm güvenlik sertleştirmeleri, test altyapısı, CI/CD pipeline ve structured logging yerinde. Sıradaki en yüksek değerli adım **Deployment** (Railway + Vercel) ile canlıya alma, ardından **Otomatik Screening** özelliği.
+Sprint 1-3 tamamlandı. Denetimde çıkan tüm bug'lar giderildi; 73 test geçiyor,
+TypeScript build temiz. Sıradaki en yüksek değerli adım **Deployment** (Railway + Vercel).
+
+**Deployment öncesi zorunlu env ayarları:**
+
+```env
+ENVIRONMENT=production
+FIREBASE_PRIVATE_KEY=...            # yoksa servis başlamaz (bilinçli)
+FIREBASE_PROJECT_ID=...
+FIREBASE_CLIENT_EMAIL=...
+CORS_ORIGINS=https://app.agentick.io
+RATE_LIMIT_PER_MIN=10
+RATE_LIMIT_PER_DAY=200
+```
+
+**Bilinen sınırlar:**
+- Rate limit sayaçları süreç içinde tutulur — birden fazla worker/instance ile
+  deploy edilirse her sürecin kendi sayacı olur. Dağıtık kota Faz 7'de
+  (Firestore/Redis) ele alınacak.
+- RSS kaynağı tek (Bloomberg HT). Kaynak çeşitliliği haber kalitesini artırır.
+- SQLite tek dosya — çoklu instance'ta paylaşımlı disk veya Postgres'e geçiş gerekir.

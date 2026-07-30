@@ -8,29 +8,18 @@ import os
 import threading
 
 from dotenv import load_dotenv
-from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 
-from src.ingestion.build_vector_index import COLLECTION_NAME, EMBED_MODEL
+# Embedding modeli indexleme ile ortak singleton — iki ayrı kopya RAM'de tutulmasın
+from src.ingestion.build_vector_index import COLLECTION_NAME, get_model
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-_model = None
-_model_lock = threading.Lock()
 _client = None
 _client_lock = threading.Lock()
-
-
-def _get_model() -> SentenceTransformer:
-    global _model
-    if _model is None:
-        with _model_lock:
-            if _model is None:
-                _model = SentenceTransformer(EMBED_MODEL)
-    return _model
 
 
 def _get_client() -> QdrantClient | None:
@@ -66,7 +55,7 @@ def search(query: str, ticker: str | None = None, top_k: int = 5) -> list[dict]:
         if client is None:
             return []
 
-        model = _get_model()
+        model = get_model()
         query_embedding = model.encode([query])[0].tolist()
 
         query_filter = None

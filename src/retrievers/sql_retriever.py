@@ -66,6 +66,7 @@ Tablo: ratios
   debt_to_equity REAL  -- Borç/Özkaynak oranı
   market_cap REAL      -- Piyasa değeri (TL)
   current_price REAL   -- Güncel fiyat (TRY)
+  sector TEXT          -- Sektör (ör. "Industrials", "Financial Services") — sadece güncel tarihli satırda dolu
 
 Tablo: dividends
   ticker TEXT      -- Hisse kodu (ör. TUPRS)
@@ -130,10 +131,47 @@ def _generate_sql(question: str, ticker: str) -> str:
     return raw.strip()
 
 
+# LLM'in ürettiği SQL doğrudan çalıştırıldığı için sadece tek bir SELECT'e izin verilir.
+# PDF içeriği veya kullanıcı sorusu üzerinden prompt injection ile veri değiştiren/silen
+# bir sorgu üretilmesini engeller.
+_FORBIDDEN_SQL_RE = re.compile(
+    r"\b(insert|update|delete|drop|alter|create|replace|truncate|attach|detach|"
+    r"pragma|vacuum|reindex|grant|revoke)\b",
+    re.IGNORECASE,
+)
+
+
+def _validate_sql(sql: str) -> str | None:
+    """
+    Üretilen SQL'i doğrular. Sorun varsa hata mesajı, sorun yoksa None döner.
+    """
+    stripped = sql.strip().rstrip(";").strip()
+
+    if not stripped:
+        return "Boş sorgu."
+    if ";" in stripped:
+        return "Birden fazla ifade içeren sorgu reddedildi."
+    if "--" in stripped or "/*" in stripped:
+        return "Yorum içeren sorgu reddedildi."
+    if not re.match(r"^(select|with)\b", stripped, re.IGNORECASE):
+        return "Sadece SELECT sorgularına izin verilir."
+    if _FORBIDDEN_SQL_RE.search(stripped):
+        return "Veri değiştiren ifade içeren sorgu reddedildi."
+
+    return None
+
+
 def _run_sql(sql: str) -> list[dict]:
     if not DB_PATH.exists():
         return []
-    conn = sqlite3.connect(DB_PATH)
+
+    problem = _validate_sql(sql)
+    if problem:
+        logger.warning("Güvenli olmayan SQL reddedildi (%s): %s", problem, sql[:200])
+        return [{"error": problem, "sql": sql}]
+
+    # Salt-okunur bağlantı — guard atlansa bile yazma mümkün olmaz
+    conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     try:
         cursor = conn.execute(sql)

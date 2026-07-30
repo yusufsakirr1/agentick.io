@@ -10,7 +10,8 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
-from backend.auth import get_current_user
+from backend.constants import validate_tickers
+from backend.rate_limit import enforce_rate_limit
 from backend.services.metrics_utils import get_conn, build_ticker_metrics, DB_PATH
 
 from src.agent.graph import run_agent
@@ -24,11 +25,8 @@ AGENT_TIMEOUT = 120  # saniye — LLM agent
 
 
 @router.get("/compare/metrics")
-async def compare_metrics(tickers: str = Query(..., description="Virgülle ayrılmış ticker listesi (2-5)"), current_user: dict = Depends(get_current_user)):
-    ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
-
-    if len(ticker_list) < 2 or len(ticker_list) > 5:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="2 ile 5 arasında ticker gerekli.")
+async def compare_metrics(tickers: str = Query(..., description="Virgülle ayrılmış ticker listesi (2-5)"), current_user: dict = Depends(enforce_rate_limit)):
+    ticker_list = validate_tickers(tickers.split(","), min_count=2, max_count=5)
 
     # Her zaman güncel veri çek (fiyat, oran vb. sürekli değişiyor)
     from src.ingestion.bist_finance_client import fetch_and_store
@@ -65,14 +63,13 @@ class CompareAskRequest(BaseModel):
 
 
 @router.post("/compare/ask")
-async def compare_ask(request: CompareAskRequest, current_user: dict = Depends(get_current_user)):
-    tickers = [t.strip().upper() for t in request.tickers if t.strip()]
+async def compare_ask(request: CompareAskRequest, current_user: dict = Depends(enforce_rate_limit)):
     question = request.question.strip()
 
     if not question:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Soru boş olamaz.")
-    if len(tickers) < 2:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="En az 2 ticker gerekli.")
+
+    tickers = validate_tickers(request.tickers, min_count=2, max_count=5)
 
     try:
         result = await asyncio.wait_for(

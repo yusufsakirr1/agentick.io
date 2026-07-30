@@ -12,9 +12,9 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.12-blue?logo=python" alt="Python" />
   <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react" alt="React" />
-  <img src="https://img.shields.io/badge/LLM-Claude%20Sonnet%204.6-blueviolet" alt="Claude" />
+  <img src="https://img.shields.io/badge/LLM-Claude%20Haiku%204.5-blueviolet" alt="Claude" />
   <img src="https://img.shields.io/badge/CI-GitHub%20Actions-2088FF?logo=github-actions" alt="CI" />
-  <img src="https://img.shields.io/badge/Tests-14%20passing-brightgreen" alt="Tests" />
+  <img src="https://img.shields.io/badge/Tests-73%20passing-brightgreen" alt="Tests" />
 </p>
 
 ---
@@ -27,7 +27,7 @@ Turk bireysel yatirimcilarin BIST hisseleri uzerinde **Turkce sorular** sorabile
 - yfinance ile canli finansal veriler (gelir tablosu, bilanco, nakit akisi, oranlar)
 - Hisseler arasi karsilastirma (F/K, PD/DD, net marj, ROE vb.)
 - Portfoy dashboard (K/Z, sektor dagilimi, temettu takvimi, konsantrasyon uyarilari)
-- Haberleri takip edin (Bloomberg HT, Dunya gazetesi vb.)
+- Haberleri takip edin (RSS -- su an Bloomberg HT)
 
 ---
 
@@ -51,7 +51,7 @@ Kullanici sorusu
   CRITIC (Claude Haiku)    --> bilgi yeterli mi? degilse PLANNER'a geri don (max 3 tur)
       |
       v
-  SYNTHESIZER (Claude Sonnet 4.6) --> Turkce, kaynakli cevap
+  SYNTHESIZER (Claude Haiku 4.5) --> Turkce, kaynakli cevap
 ```
 
 ---
@@ -60,8 +60,7 @@ Kullanici sorusu
 
 | Katman | Teknoloji |
 |---|---|
-| LLM (Sentez) | Claude Sonnet 4.6 |
-| LLM (Planner/Critic/SQL) | Claude Haiku 4.5 |
+| LLM (tum node'lar) | Claude Haiku 4.5 |
 | Agent Orkestrasyonu | LangGraph |
 | Embedding | paraphrase-multilingual-mpnet-base-v2 (lokal, 768D) |
 | Vektor DB | Qdrant Cloud (EU-Central-1) |
@@ -71,7 +70,7 @@ Kullanici sorusu
 | Auth | Firebase Authentication (Google OAuth) |
 | Backend | FastAPI + Uvicorn |
 | Frontend | React 18 + TypeScript + Vite + Tailwind CSS |
-| Test | pytest + pytest-asyncio (14 test) |
+| Test | pytest + pytest-asyncio (73 test) |
 | CI/CD | GitHub Actions (backend test + frontend build) |
 | Gozlemlenebilirlik | LangSmith |
 
@@ -82,7 +81,8 @@ Kullanici sorusu
 ### Sohbet -- Tekil Hisse Analizi
 - BIST-30 hisselerinden birini sec, Turkce soru sor
 - Agent PDF, SQL ve haber kaynaklarini paralel tarar
-- Sohbet hafizasi (takip sorulari anlasilir)
+- Sohbet hafizasi: konusmalar localStorage'da kalici, sidebar'da tarih grupli liste
+  (Bugun / Dun / Bu Hafta / Daha Once), takip sorulari anlasilir
 - Veri yoksa otomatik yfinance'den cekilir (auto-fetch)
 
 ### Karsilastirma -- Coklu Hisse
@@ -100,13 +100,17 @@ Kullanici sorusu
 
 ### Guvenlik ve Kalite
 - Firebase Auth (Google OAuth) + backend token dogrulama
-- BIST-30 ticker whitelist (30 hisse)
-- Dosya yükleme: sadece PDF, max 50 MB, guvenli dosya adi
+- **Fail-safe auth:** `ENVIRONMENT` tanimli degilse production varsayilir — dev bypass kazara acilmaz
+- **Text-to-SQL guard:** LLM'in urettigi sorgu SELECT-only + tek ifade; baglanti salt-okunur
+- BIST-30 ticker whitelist — tum uclarda (`backend/constants.py` tek kaynak)
+- **Rate limiting:** kullanici basina dakika + gun limiti (429 + Retry-After)
+- **CORS:** `CORS_ORIGINS` ortam degiskeninden yonetilir
+- Dosya yükleme: sadece PDF (magic byte kontrolu), max 50 MB, path traversal korumasi
 - Tum endpoint'lerde timeout (agent 120s, fetch 60s)
 - DB baglanti leak onleme (try/finally)
 - Input validation + HTTPException
 - `print()` --> `logging` migrasyonu (structured logging)
-- 14 test (pytest): health, auth, validation
+- 73 test (pytest): health, auth, validation, SQL guard, rate limit, dosya adi guvenligi
 - CI/CD: GitHub Actions (her push/PR'da otomatik test + build)
 
 ---
@@ -177,8 +181,10 @@ uv run pytest tests/ -v
 ```
 agentick.io/
 ├── backend/
-│   ├── main.py                   # FastAPI app + logging config
-│   ├── auth.py                   # Firebase Auth + dev mode bypass
+│   ├── main.py                   # FastAPI app + CORS (env) + logging + startup auth init
+│   ├── auth.py                   # Firebase Auth (fail-safe: varsayilan production)
+│   ├── constants.py              # BIST-30 whitelist + ticker dogrulama (tek kaynak)
+│   ├── rate_limit.py             # Kullanici basina kayan pencere kotasi
 │   ├── routes/
 │   │   ├── query.py              # POST /api/ask (120s timeout)
 │   │   ├── upload.py             # POST /api/upload (ticker whitelist, 50MB limit)
@@ -224,10 +230,13 @@ agentick.io/
 │           ├── conversationStorage.ts
 │           └── portfolioService.ts
 ├── tests/
-│   ├── conftest.py               # Shared fixtures (TestClient)
+│   ├── conftest.py               # Shared fixtures (TestClient + state reset)
 │   ├── test_health.py            # Health endpoint testi
-│   ├── test_auth.py              # Auth middleware testleri
-│   └── test_validation.py        # 12 input validation testi
+│   ├── test_auth.py              # Auth fail-safe testleri
+│   ├── test_validation.py        # Input validation + ticker whitelist testleri
+│   ├── test_sql_guard.py         # Text-to-SQL guvenlik testleri
+│   ├── test_rate_limit.py        # Kota testleri
+│   └── test_upload_security.py   # Dosya adi / path traversal testleri
 ├── .github/workflows/ci.yml     # CI/CD pipeline
 ├── data/
 │   ├── raw/                      # Yuklenen PDF'ler

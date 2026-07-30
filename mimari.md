@@ -24,12 +24,18 @@ React Frontend (Vite, port 5173, react-router-dom)
 FastAPI Backend (Uvicorn, port 8000)
     │  ┌─ Auth Layer ─────────────────────────────────┐
     │  │  Firebase token doğrulama (verify_firebase_token)   │
-    │  │  Dev mode: tüm token'lar kabul edilir               │
-    │  │  Production: FIREBASE_PRIVATE_KEY zorunlu            │
+    │  │  ENVIRONMENT tanımsızsa → production (fail-safe)    │
+    │  │  Dev bypass sadece development/dev/local/test'te    │
+    │  │  Production: FIREBASE_PRIVATE_KEY zorunlu (startup) │
+    │  └──────────────────────────────────────────────────────┘
+    │  ┌─ Rate Limit Layer ───────────────────────────┐
+    │  │  Kullanıcı (uid) başına dakika + gün penceresi      │
+    │  │  Aşımda 429 + Retry-After                           │
     │  └──────────────────────────────────────────────────────┘
     │  ┌─ Validation Layer ───────────────────────────┐
-    │  │  Ticker whitelist (30 BIST-30 hissesi)              │
-    │  │  Dosya: sadece PDF, max 50MB, safe filename         │
+    │  │  Ticker whitelist — TÜM uçlarda (constants.py)      │
+    │  │  Dosya: sadece PDF (magic byte), max 50MB,          │
+    │  │         path traversal koruması                      │
     │  │  Input: HTTPException ile hata döndürme             │
     │  └──────────────────────────────────────────────────────┘
     │  ┌─ Timeout Layer ──────────────────────────────┐
@@ -66,7 +72,7 @@ FastAPI Backend (Uvicorn, port 8000)
             └── INSUFFICIENT → PLANNER'a geri dön (max 3 tur)
             │
             ▼
-        SYNTHESIZER NODE (Claude Sonnet 4.6)
+        SYNTHESIZER NODE (Claude Haiku 4.5)
             Max 12 kaynak (skora göre sıralı)
             Türkçe, kaynaklı cevap
             Çoklu ticker → SYSTEM_PROMPT_COMPARE (karşılaştırmalı analiz)
@@ -117,7 +123,7 @@ critic_node ──── "retry" ──→ planner_node
 | Planner | Claude Haiku 4.5 | Soruyu rewrite et, sub_task üret. Çoklu ticker → her ticker için ayrı sub_task (ticker alanı dahil) |
 | Router | — | asyncio.gather + 30s timeout/task, per-task ticker desteği, duplicate filtreleme, auto-fetch |
 | Critic | Claude Haiku 4.5 | Toplanan bilginin yeterliliğini değerlendir |
-| Synthesizer | Claude Sonnet 4.6 | Max 12 kaynak, Türkçe, kaynaklı yanıt. Çoklu ticker → karşılaştırmalı analiz prompt'u |
+| Synthesizer | Claude Haiku 4.5 | Max 12 kaynak, Türkçe, kaynaklı yanıt. Çoklu ticker → karşılaştırmalı analiz prompt'u |
 
 ---
 
@@ -137,7 +143,7 @@ critic_node ──── "retry" ──→ planner_node
 | `income_statement` | Gelir, brüt kâr, EBITDA, net kâr | yfinance |
 | `balance_sheet` | Varlıklar, borç, özkaynak, nakit | yfinance |
 | `cash_flow` | Operasyonel, yatırım, finansman, serbest nakit akışı | yfinance |
-| `ratios` | P/E, P/B, net marj, ROE, ROA, D/E, piyasa değeri, fiyat, sektör | yfinance |
+| `ratios` | P/E, P/B, net marj, ROE, ROA, D/E, piyasa değeri, fiyat, sektör (`sector`) | yfinance |
 | `dividends` | Temettü tarihi ve hisse başı tutar | yfinance |
 | `stock_splits` | Bedelsiz sermaye artırımı / hisse bölünme tarihi ve oranı | yfinance |
 | `pdf_tables` | PDF'den çıkarılan tablolar (pipe-delimited metin) | pdfplumber |
@@ -146,6 +152,18 @@ critic_node ──── "retry" ──→ planner_node
 **Citation formatları:**
 - yfinance tabloları: `yfinance — THYAO income_statement (2024-12-31 – 2022-12-31)`
 - PDF tabloları: `PDF — THYAO THYAO_faaliyet_2026.pdf`
+
+**Güvenlik (SQL guard):**
+
+LLM'in ürettiği SQL doğrudan çalıştırıldığı için — PDF içeriği veya soru üzerinden
+prompt injection ile veri silinmesini/değiştirilmesini engellemek amacıyla:
+
+- `_validate_sql()`: yalnızca tek bir `SELECT` / `WITH` ifadesine izin verir
+- `;` (çoklu ifade), `--` ve `/* */` (yorum) içeren sorgular reddedilir
+- `INSERT/UPDATE/DELETE/DROP/ALTER/CREATE/REPLACE/TRUNCATE/ATTACH/PRAGMA/VACUUM...` yasak
+- Bağlantı salt-okunur açılır: `sqlite3.connect("file:...?mode=ro", uri=True)` —
+  guard atlansa bile yazma mümkün değil
+- Reddedilen sorgu `{"error": ...}` döner, retriever boş liste verir
 
 **Önemli davranışlar:**
 - `pdf_tables` sorgularında OR koşulları parantez içinde (prompt kuralı)
@@ -182,11 +200,29 @@ async def run_task_with_timeout(task):
 **Collection:** `kap_filings`
 **Filtreleme:** `ticker` payload filtresi ile hisseye özgü arama
 
-**Güvenilirlik özellikleri (Sprint 1):**
+**Güvenilirlik özellikleri:**
 - Singleton `QdrantClient` + singleton `SentenceTransformer` (thread-safe, `threading.Lock()`)
+- Embedding modeli indexleme ile **ortak** singleton (`build_vector_index.get_model()`) —
+  iki ayrı kopya RAM'de tutulmaz
 - `os.environ.get()` ile KeyError önleme
 - Tüm `search()` fonksiyonu try/except ile sarılı — Qdrant hatalarında boş liste döner (crash etmez)
 - Payload erişimi `.get()` ile (KeyError koruması)
+
+**Point ID stratejisi (kritik):**
+
+Eskiden point ID'leri `0, 1, 2, ...` şeklinde sıra numarasıydı; ikinci bir PDF
+yüklendiğinde ilkinin chunk'ları **üzerine yazılıyordu** (veri kaybı). Artık:
+
+```python
+POINT_NAMESPACE = uuid.UUID("6f1b4c9e-...")
+id = uuid.uuid5(POINT_NAMESPACE, f"{ticker}|{source_file}|{chunk_index}")
+```
+
+- Farklı hisse/dosya kombinasyonları asla çakışmaz
+- Aynı dosya yeniden yüklenirse aynı ID üretilir → temiz güncelleme
+- Yükleme öncesi `delete_existing_chunks(ticker, source_file)` ile eski sürümün
+  artık chunk'ları filtreyle silinir
+- `source_file` için de keyword payload index oluşturulur (filtreli silme için)
 
 **Citation formatı:** `KAP — THYAO Faaliyet Raporu, s.23 (Finansal Durum)`
 
@@ -205,9 +241,18 @@ async def run_task_with_timeout(task):
 
 ### News Retriever (`src/retrievers/news_retriever.py`)
 
-**Kaynak:** RSS beslemeleri (Bloomberg HT, Dünya gazetesi vb.)
+**Kaynak:** RSS beslemesi (şu an yalnızca Bloomberg HT — `RSS_SOURCES`)
 **Depolama:** SQLite `news_articles` tablosu
-**Süre:** 30 günlük cache, stale olunca otomatik yenileme
+**Süre:** 1 saatlik cache TTL (`CACHE_TTL_SECONDS`), 7 günlük saklama (`RETENTION_DAYS`)
+
+**Arama sırası (`search_news_for_ticker`):**
+1. Ticker etiketi + sorgu kelimeleri
+2. Sonuç yoksa yalnızca ticker etiketi
+3. Sonuç yoksa şirket anahtar kelimeleri (`KNOWN_TICKERS`) ile başlık/özet araması
+
+Filtresiz genel arama **yapılmaz** — böylece şirketle ilgisi olmayan haberler
+synthesizer'a veya portföy akışına sızmaz. Aynı helper hem `news_retriever`
+hem `/api/portfolio/news` hem `/api/news/search` tarafından kullanılır.
 
 **Skor hesaplama:**
 - 0.5 baz puan
@@ -279,26 +324,43 @@ yf.Ticker("THYAO.IS")
 ```
 İstek gelir
     ↓
+0. CORS
+    │  İzinli origin listesi CORS_ORIGINS env'inden okunur
+    │  Tanımsızsa yerel geliştirme adresleri; "*" reddedilir
+    ↓
 1. Firebase Auth (verify_firebase_token)
-    │  Dev mode: tüm token'lar kabul, mock user döner
-    │  Production: FIREBASE_PRIVATE_KEY yoksa RuntimeError fırlatır
+    │  ENVIRONMENT tanımsız → "production" (FAIL-SAFE)
+    │  Dev bypass yalnızca development/dev/local/test değerlerinde
+    │  Production'da FIREBASE_PRIVATE_KEY yoksa startup'ta RuntimeError
+    │    (lifespan → init_auth) — istek anında 500 dönmez, servis kalkmaz
     │  Hata mesajından internal detay sızdırmaz
     ↓
-2. Input Validation
-    │  Ticker whitelist: VALID_TICKERS set (30 BIST-30 hissesi)
-    │  Dosya: sadece PDF, max 50MB, SAFE_FILENAME_RE regex
+2. Rate Limit (enforce_rate_limit)
+    │  Kullanıcı (uid) başına kayan pencere: RATE_LIMIT_PER_MIN + PER_DAY
+    │  Aşımda 429 + Retry-After header
+    │  Süreç içi sayaç — çok instance'lı deploy'da Redis gerekir
+    ↓
+3. Input Validation
+    │  Ticker whitelist: backend/constants.py → VALID_TICKERS (tek kaynak)
+    │    ask / fetch-data / compare / portfolio / news uçlarının HEPSİNDE
+    │  Dosya: sadece PDF (%PDF magic byte), max 50MB,
+    │    taban ad alınır (path traversal), SAFE_FILENAME_RE regex
     │  Boş soru, eksik alan → HTTPException (400/422)
     ↓
-3. Timeout
+4. Timeout
     │  Agent çağrısı: 120s (asyncio.wait_for)
     │  yfinance fetch: 60s
     │  TimeoutError → 504 Gateway Timeout
     ↓
-4. DB Connection Safety
+5. SQL Guard (text-to-SQL)
+    │  Sadece tek SELECT/WITH; DDL/DML ve çoklu ifade reddedilir
+    │  SQLite bağlantısı salt-okunur (mode=ro)
+    ↓
+6. DB Connection Safety
     │  Tüm SQLite bağlantıları try/finally ile kapatılır
     │  Connection leak önleme
     ↓
-5. Structured Logging
+7. Structured Logging
     │  logging.basicConfig() ile merkezi config
     │  Her modülde logger = logging.getLogger(__name__)
     │  INFO/WARNING/ERROR seviyeleri
@@ -484,9 +546,11 @@ main.tsx (BrowserRouter + AuthProvider)
     │   └── Footer (3 sütun: logo+açıklama | ürün linkleri | iletişim, © 2026)
     │
     └── [user] → Layout shell (Sidebar + Routes)
-        ├── Sidebar.tsx                 # Sohbet/Karşılaştır/Portföy navigasyonu + konuşma listesi
+        ├── Sidebar.tsx                 # Yeni Sohbet + navigasyon + konuşma listesi
+        │   ├── [Yeni Sohbet butonu]    # aktif konuşmayı sıfırlar, "/" rotasına gider
         │   ├── [Navigasyon tabları]    # useNavigate + useLocation
-        │   └── [Conversation listesi]
+        │   └── [Conversation listesi]  # Bugün / Dün / Bu Hafta / Daha Önce
+        │       └── ticker rozeti + başlık + hover'da sil (×)
         └── Ana Alan (Routes)
             ├── Route "/" → ChatPage.tsx
             │   ├── Header (chat modunda)   # Logo + ticker dropdown
@@ -543,15 +607,26 @@ Kullanıcı ilk gelir → App.tsx: user=null → LoginPage gösterilir
 
 ```typescript
 // Auth (AuthContext üzerinden)
-user: User | null               // Firebase Auth user nesnesi
-loading: boolean                // Auth durumu yükleniyor mu
+user: User | null                 // Firebase Auth user nesnesi
+loading: boolean                  // Auth durumu yükleniyor mu
 
 // App state
-messages: MessageData[]         // Aktif konuşma mesajları
-ticker: string                  // Seçili hisse kodu
-loading: boolean                // Agent yanıt bekliyor
-suggestion: string | undefined  // Öneri soru chip'i tıklandığında
+conversations: Conversation[]     // localStorage'dan yüklenen tüm konuşmalar
+activeId: string | null           // Aktif konuşma (null → boş/yeni sohbet ekranı)
+defaultTicker: string             // Aktif konuşma yokken seçili hisse
+loading: boolean                  // Agent yanıt bekliyor
+suggestion: string | undefined    // Öneri soru chip'i tıklandığında
+
+// Türetilmiş
+active   = conversations.find(c => c.id === activeId) ?? null
+messages = active?.messages ?? []
+ticker   = active?.ticker ?? defaultTicker
 ```
+
+Her mesaj sonrası `store.upsert()` ile localStorage güncellenir ve state
+`store.getAll()` ile tazelenir. Agent yanıtı, sorunun sorulduğu konuşma
+nesnesine yazılır — kullanıcı yanıt beklerken başka bir sohbete geçse bile
+cevap doğru konuşmaya düşer.
 
 ### Shared Constants
 
@@ -697,8 +772,7 @@ Payload:
 
 | Katman | Teknoloji | Versiyon |
 |---|---|---|
-| LLM (Sentez) | Claude Sonnet 4.6 | claude-sonnet-4-6 |
-| LLM (Planner/Critic) | Claude Haiku 4.5 | claude-haiku-4-5-20251001 |
+| LLM (Planner/Critic/SQL/Sentez) | Claude Haiku 4.5 | claude-haiku-4-5-20251001 |
 | Agent Orkestrasyonu | LangGraph | ≥0.2.0 |
 | Embedding (lokal) | paraphrase-multilingual-mpnet-base-v2 | sentence-transformers ≥5.6 |
 | Vektör DB | Qdrant Cloud | EU-Central-1 |
@@ -733,7 +807,15 @@ QDRANT_URL=https://xxx.eu-central-1-0.aws.cloud.qdrant.io
 QDRANT_API_KEY=...
 
 # Ortam (development / production)
+# Tanımlı DEĞİLSE production varsayılır — auth bypass kazara açılmaz.
 ENVIRONMENT=development
+
+# CORS — virgülle ayrılmış izinli origin listesi (tanımsızsa localhost)
+CORS_ORIGINS=https://app.agentick.io,https://agentick.io
+
+# Rate limit (kullanıcı başına). 0 = kapalı.
+RATE_LIMIT_PER_MIN=10
+RATE_LIMIT_PER_DAY=200
 
 # Firebase Backend (production için)
 FIREBASE_PRIVATE_KEY=...
@@ -773,24 +855,32 @@ THYAO  TOASO  TUPRS  VAKBN  YKBNK
 
 ```
 tests/
-├── conftest.py          # Shared fixtures: TestClient + dev auth bypass
-├── test_health.py       # GET /api/health → 200, status=ok, version mevcut
-├── test_auth.py         # Dev mode mock user + production mode RuntimeError
-└── test_validation.py   # 12 input validation testi:
-                         #   - Boş soru → 400
-                         #   - Eksik alan → 422
-                         #   - Boş ticker → 400
-                         #   - Tek ticker karşılaştırma → 400
-                         #   - 6+ ticker karşılaştırma → 400
-                         #   - Boş portföy holdings → 400
-                         #   - Boş portföy sorusu → 400
-                         #   - Portföy ticker'sız → 400
-                         #   - Portföy haberleri ticker'sız → 400
-                         #   - Geçersiz ticker upload → 400
-                         #   - PDF olmayan dosya upload → 400
+├── conftest.py              # TestClient fixture + her testten sonra state reset
+│                            # (rate limit sayaçları, auth init durumu)
+├── test_health.py           # GET /api/health → 200, status=ok, version mevcut
+├── test_auth.py             # Fail-safe auth:
+│                            #   - dev mode mock user (development/dev/local/test)
+│                            #   - production'da FIREBASE_PRIVATE_KEY zorunlu
+│                            #   - ENVIRONMENT tanımsız → production gibi davranır
+│                            #   - staging/prod/canary gibi bilinmeyen adlar bypass açmaz
+├── test_validation.py       # Input validation + ticker whitelist:
+│                            #   - boş/eksik soru → 400/422
+│                            #   - 2-5 ticker sınırı (compare)
+│                            #   - BIST-30 dışı ticker → 400 (ask, fetch-data,
+│                            #     compare/metrics, compare/ask, portfolio/*)
+│                            #   - geçersiz ticker / PDF olmayan dosya upload → 400
+├── test_sql_guard.py        # Text-to-SQL güvenliği:
+│                            #   - SELECT/WITH kabul, DDL/DML red
+│                            #   - çoklu ifade ve yorum red
+│                            #   - reddedilen sorgu DB'ye hiç gitmiyor
+│                            #   - bağlantı gerçekten salt-okunur
+├── test_rate_limit.py       # Kota: dakika/gün limiti, kullanıcı bazlı izolasyon,
+│                            # 0 değeriyle kapatma, 429 + Retry-After
+└── test_upload_security.py  # Dosya adı: path traversal etkisizleştirme,
+                             # boşluk/Türkçe karakter kabulü, uzantı ve uzunluk
 ```
 
-**Çalıştırma:** `uv run pytest tests/ -v` → 14 test, tümü geçiyor.
+**Çalıştırma:** `uv run pytest tests/ -v` → 73 test, tümü geçiyor.
 
 ### CI/CD Pipeline (`.github/workflows/ci.yml`)
 
@@ -852,9 +942,19 @@ Job 2: frontend-build (Frontend)
 | **DB bağlantı leak önleme (try/finally)** | ✅ |
 | **Input validation (ticker whitelist, 50MB limit, safe filename)** | ✅ |
 | **Structured logging (print → logging migrasyonu)** | ✅ |
-| **Test altyapısı (14 pytest testi)** | ✅ |
+| **Test altyapısı (73 pytest testi)** | ✅ |
 | **CI/CD pipeline (GitHub Actions)** | ✅ |
 | **.env.example şablonları (backend + frontend)** | ✅ |
+| **Fail-safe auth (ENVIRONMENT tanımsız → production)** | ✅ |
+| **Text-to-SQL guard (SELECT-only + salt-okunur bağlantı)** | ✅ |
+| **Qdrant deterministik point ID (uuid5) + eski chunk temizliği** | ✅ |
+| **Ticker whitelist tüm uçlarda (backend/constants.py)** | ✅ |
+| **Rate limiting (kullanıcı başına dakika + gün)** | ✅ |
+| **CORS ortam değişkeninden yönetim** | ✅ |
+| **Dosya adı: path traversal koruması + PDF magic byte** | ✅ |
+| **Haber aramada filtresiz genel fallback kaldırıldı** | ✅ |
+| **Kalıcı sohbet hafızası (localStorage + Sidebar listesi)** | ✅ |
+| **Portföy metrikleri lot/maliyet değişiminde tazeleniyor** | ✅ |
 | Otomatik screening/alert | ❌ Planlandı |
 | Kullanıcı kotası (Firestore) | ❌ Planlandı |
 | Deployment (Railway / Vercel) | ❌ Planlandı |
@@ -864,6 +964,9 @@ Job 2: frontend-build (Frontend)
 ## 13. Sonraki Adımlar
 
 1. **Deployment** — Railway (backend) + Vercel (frontend) ile canlıya alma
+   - Production'da `ENVIRONMENT=production`, `FIREBASE_PRIVATE_KEY` ve
+     `CORS_ORIGINS` **zorunlu** olarak ayarlanmalı
+   - Çok instance'lı çalışılacaksa rate limit sayaçları Redis'e taşınmalı
 2. **Otomatik Screening/Alert** — Kriter bazlı hisse taraması, bildirim
 3. **Zaman Serisi Takibi** — Watchlist, temettü/fiyat bildirimi
 4. **KAP Entegrasyonu** — Özel durum açıklamaları, endeks değişiklikleri

@@ -12,7 +12,8 @@ from collections import defaultdict
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from backend.auth import get_current_user
+from backend.constants import validate_tickers
+from backend.rate_limit import enforce_rate_limit
 from backend.services.metrics_utils import (
     get_conn, build_ticker_metrics, fetch_dividends, DB_PATH,
 )
@@ -31,6 +32,8 @@ HOLDING_CONCENTRATION_THRESHOLD = 30   # %
 SECTOR_CONCENTRATION_THRESHOLD = 40    # %
 MAX_DIVIDEND_RESULTS = 20
 MAX_NEWS_RESULTS = 20
+MAX_PORTFOLIO_TICKERS = 30   # BIST-30 tamamı sığar
+NEWS_PER_TICKER = 5
 
 
 # ── Request Models ──
@@ -58,11 +61,14 @@ class PortfolioNewsRequest(BaseModel):
 # ── POST /portfolio/metrics ──
 
 @router.post("/portfolio/metrics")
-async def portfolio_metrics(request: PortfolioMetricsRequest, current_user: dict = Depends(get_current_user)):
+async def portfolio_metrics(request: PortfolioMetricsRequest, current_user: dict = Depends(enforce_rate_limit)):
     if not request.holdings:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="En az 1 holding gerekli.")
 
-    tickers = list({h.ticker.strip().upper() for h in request.holdings})
+    validated = validate_tickers(
+        [h.ticker for h in request.holdings], min_count=1, max_count=MAX_PORTFOLIO_TICKERS
+    )
+    tickers = list(dict.fromkeys(validated))   # tekrarları at, sırayı koru
 
     # Güncel veri çek
     from src.ingestion.bist_finance_client import fetch_and_store
@@ -198,14 +204,13 @@ async def portfolio_metrics(request: PortfolioMetricsRequest, current_user: dict
 # ── POST /portfolio/ask ──
 
 @router.post("/portfolio/ask")
-async def portfolio_ask(request: PortfolioAskRequest, current_user: dict = Depends(get_current_user)):
-    tickers = [t.strip().upper() for t in request.tickers if t.strip()]
+async def portfolio_ask(request: PortfolioAskRequest, current_user: dict = Depends(enforce_rate_limit)):
     question = request.question.strip()
 
     if not question:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Soru boş olamaz.")
-    if not tickers:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="En az 1 ticker gerekli.")
+
+    tickers = validate_tickers(request.tickers, min_count=1, max_count=MAX_PORTFOLIO_TICKERS)
 
     try:
         result = await asyncio.wait_for(
@@ -234,12 +239,10 @@ async def portfolio_ask(request: PortfolioAskRequest, current_user: dict = Depen
 # ── POST /portfolio/news ──
 
 @router.post("/portfolio/news")
-async def portfolio_news(request: PortfolioNewsRequest, current_user: dict = Depends(get_current_user)):
-    tickers = [t.strip().upper() for t in request.tickers if t.strip()]
-    if not tickers:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="En az 1 ticker gerekli.")
+async def portfolio_news(request: PortfolioNewsRequest, current_user: dict = Depends(enforce_rate_limit)):
+    tickers = validate_tickers(request.tickers, min_count=1, max_count=MAX_PORTFOLIO_TICKERS)
 
-    from src.ingestion.news_client import search_news, fetch_news_if_stale, KNOWN_TICKERS
+    from src.ingestion.news_client import fetch_news_if_stale, search_news_for_ticker
 
     # Haberleri tazele
     fetch_news_if_stale()
@@ -248,16 +251,8 @@ async def portfolio_news(request: PortfolioNewsRequest, current_user: dict = Dep
     seen_links: set[str] = set()
 
     for t in tickers:
-        # 1) Ticker tag'ine göre ara
-        articles = search_news(ticker=t, query="", top_k=5)
-
-        # 2) Yoksa şirket anahtar kelimeleriyle başlık/özette ara
-        if not articles:
-            keywords = KNOWN_TICKERS.get(t, [])
-            for kw in keywords:
-                articles = search_news(ticker=None, query=kw, top_k=5)
-                if articles:
-                    break
+        # Ticker tag'i → bulunamazsa şirket anahtar kelimeleri (alakasız haber getirmez)
+        articles = search_news_for_ticker(t, top_k=NEWS_PER_TICKER)
 
         for a in articles:
             link = a.get("link", "")

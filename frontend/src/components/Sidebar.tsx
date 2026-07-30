@@ -1,7 +1,10 @@
 import { useNavigate, useLocation } from 'react-router-dom'
 import AgentLogo from './AgentLogo'
-import { MessageCircle, GitCompareArrows, Briefcase, LogOut } from 'lucide-react'
+import {
+  MessageCircle, GitCompareArrows, Briefcase, LogOut, MessageCirclePlus, X,
+} from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import { groupByDate, type Conversation } from '../services/conversationStorage'
 
 const NAV_ITEMS = [
   { label: 'Sohbet', path: '/', icon: MessageCircle },
@@ -9,10 +12,36 @@ const NAV_ITEMS = [
   { label: 'Portföy', path: '/portfolio', icon: Briefcase },
 ]
 
-export default function Sidebar() {
+interface Props {
+  conversations: Conversation[]
+  activeId: string | null
+  onNewChat: () => void
+  onSelectConversation: (id: string) => void
+  onDeleteConversation: (id: string) => void
+}
+
+export default function Sidebar({
+  conversations,
+  activeId,
+  onNewChat,
+  onSelectConversation,
+  onDeleteConversation,
+}: Props) {
   const navigate = useNavigate()
   const { pathname } = useLocation()
   const { user, signOut } = useAuth()
+
+  const groups = groupByDate(conversations)
+
+  const handleNewChat = () => {
+    onNewChat()
+    navigate('/')
+  }
+
+  const handleSelect = (id: string) => {
+    onSelectConversation(id)
+    navigate('/')
+  }
 
   return (
     <aside className="w-64 flex-shrink-0 bg-white rounded-2xl shadow-sm flex flex-col overflow-hidden">
@@ -29,8 +58,20 @@ export default function Sidebar() {
         </div>
       </div>
 
+      {/* Yeni sohbet */}
+      <div className="px-3 pb-3">
+        <button
+          onClick={handleNewChat}
+          className="w-full flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium
+                     text-white bg-gray-900 hover:bg-gray-800 transition-colors cursor-pointer"
+        >
+          <MessageCirclePlus className="w-4 h-4 flex-shrink-0" />
+          Yeni Sohbet
+        </button>
+      </div>
+
       {/* Navigasyon */}
-      <nav className="flex-1 px-3 space-y-1">
+      <nav className="px-3 space-y-1">
         {NAV_ITEMS.map(item => {
           const active = pathname === item.path
           const Icon = item.icon
@@ -51,6 +92,54 @@ export default function Sidebar() {
           )
         })}
       </nav>
+
+      {/* Konuşma geçmişi */}
+      <div className="flex-1 min-h-0 overflow-y-auto px-3 mt-3">
+        {conversations.length === 0 ? (
+          <p className="px-3 py-4 text-xs text-gray-300">Henüz sohbet yok.</p>
+        ) : (
+          Object.entries(groups).map(([label, items]) =>
+            items.length === 0 ? null : (
+              <div key={label} className="mb-3">
+                <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-300">
+                  {label}
+                </p>
+                {items.map(c => {
+                  const isActive = c.id === activeId
+                  return (
+                    <div
+                      key={c.id}
+                      className={`group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer
+                                  transition-colors ${isActive ? 'bg-gray-100' : 'hover:bg-gray-50'}`}
+                      onClick={() => handleSelect(c.id)}
+                    >
+                      <span className="text-[10px] font-mono font-bold text-gray-400 flex-shrink-0">
+                        {c.ticker}
+                      </span>
+                      <span
+                        className={`flex-1 min-w-0 truncate text-xs ${
+                          isActive ? 'text-gray-900 font-medium' : 'text-gray-600'
+                        }`}
+                        title={c.title || 'Yeni sohbet'}
+                      >
+                        {c.title || 'Yeni sohbet'}
+                      </span>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onDeleteConversation(c.id) }}
+                        title="Sohbeti sil"
+                        className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-gray-300
+                                   hover:text-red-500 transition-all flex-shrink-0"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            )
+          )
+        )}
+      </div>
 
       {/* Alt kısım */}
       <div className="px-4 py-4 border-t border-gray-100">
