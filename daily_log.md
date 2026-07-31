@@ -1644,3 +1644,97 @@ yeniden yazıldı; `..` içeren adlar için ayrı bir red testi eklendi.
 - [ ] Custom domain (agentick.io)
 - [ ] Çok instance'lı deploy için rate limit sayaçlarını Redis'e taşıma
 - [ ] Otomatik Screening/Alert
+
+---
+
+## 2026-07-31 — Cuma
+**Kaynak Gösterimi — Cevap Hangi Dosyanın Hangi Sayfasından Geldi**
+
+Agent bugüne kadar cevabın içine metin olarak alıntı yazıyordu (`citation`), ama
+kullanıcı **hangi kaynağın gerçekten kullanıldığını** göremiyordu: 504 sayfalık bir
+faaliyet raporunda cevabın 23. sayfadan mı 310. sayfadan mı geldiği belirsizdi.
+Bu oturumda synthesizer'a verilen kaynaklar yapısal olarak dışarı taşındı ve her
+mesajın altında açılabilir bir kaynak listesi olarak gösterildi.
+
+---
+
+### Adım 1 — Retriever'ların Kaynak Metadata'sı Zenginleştirildi
+
+Üç retriever da artık kaynak tipini ve yerini açıkça döndürüyor:
+
+- `vector_retriever.py`: `source_type: "vector"` ve `chunk_index` eklendi
+  (dosya adı, sayfa, bölüm zaten vardı)
+- `sql_retriever.py`: `pdf_tables` sorgusunda satırlardan **sayfa numaraları toplanıyor**,
+  citation'a `(s.12, s.13)` olarak yazılıyor, `source_type` `"pdf"` oluyor.
+  Finansal sorgularda ise `source_type: "sql"` + kullanılan `tables` + `period_range`
+- `news_retriever.py`: `title`, `source`, `published_at` alanları eklendi
+
+Böylece SQL retriever'ın tek `source_type: "sql"` etiketi ikiye ayrıldı — PDF tablosu
+ile yfinance verisi UI'da farklı gösterilebiliyor.
+
+---
+
+### Adım 2 — Synthesizer: Kullanılan Kaynakların Ayrı Listesi
+
+`synthesizer_node.py` içinde kaynak seçimi ile prompt kurgusu ayrıldı:
+
+- `_select_sources()` — skora göre sıralayıp `MAX_SOURCES` (12) ile kırpar
+- `_build_context()` — artık seçilmiş listeyi alıyor, kendi kırpmasını yapmıyor
+- `_to_source()` — retriever çıktısını frontend'in anlayacağı sade kayda çevirir
+  (tip, dosya, sayfalar, bölüm, tablo, skor, 240 karakterlik `snippet`)
+- `build_source_list()` — dışarıdan test edilebilir giriş noktası
+
+Kritik nokta: liste **modele gerçekten verilen** 12 kaynaktan üretiliyor, retriever'ın
+bulduğu ham sonuçların tamamından değil. Kullanıcı, cevabı üreten alıntıları görüyor.
+
+---
+
+### Adım 3 — State ve API Zinciri
+
+- `state.py`: `used_sources: list[dict]` alanı
+- `graph.py`: initial state'e `used_sources: []`, dönüşte `sources` anahtarı
+- `backend/routes/`: `query.py`, `compare.py`, `portfolio.py` — üçü de yanıta
+  `sources` ekliyor
+- `api/client.ts`: `AgentSource` tipi (`vector | pdf | sql | news` ayrımı, tipe özel
+  opsiyonel alanlar), `AskResult` ve `CompareAskResult` genişletildi
+
+---
+
+### Adım 4 — SourceList Bileşeni
+
+`frontend/src/components/SourceList.tsx` (yeni):
+
+- Varsayılan kapalı, `Kaynaklar (7) · 4 sayfa` şeklinde özet buton
+- **PDF/KAP kaynakları dosya bazında gruplanıyor**, sayfalar `s.12` `s.13` rozetleri
+  olarak sıralı diziliyor; aynı sayfa birden fazla chunk'tan gelirse en yüksek skorlu
+  olan tutuluyor
+- Rozete tıklayınca o sayfanın snippet'i, bölümü ve eşleşme yüzdesi açılıyor
+- Finansal veri (mavi, tablo adları + dönem aralığı) ve haberler (kehribar, başlık +
+  dış link + tarih) ayrı bloklarda
+- `Message.tsx`: her AI mesajının altına `<SourceList />`; ayrıca araç rozetlerine
+  eksik olan `📰 Haber` tipi eklendi (önceden haber de "Vektör" görünüyordu)
+
+---
+
+### Adım 5 — Testler
+
+`tests/test_sources.py` (yeni, 10 test):
+
+- Dört kaynak tipinin de doğru alanları taşıması (vector sayfa+bölüm, pdf çoklu sayfa,
+  sql tablo+dönem, news başlık+link)
+- `source_type` yoksa `vector`'e düşmesi
+- Snippet'in `SNIPPET_LENGTH`'te `…` ile kesilmesi
+- 30 sonuçtan 12'ye kırpma ve skor sıralaması
+- Boş `retrieved` → boş liste
+- `sql_retriever` entegrasyon testi: geçici SQLite DB ile `pdf_tables` sorgusunun
+  `pages: [12, 13]` ve `s.12, s.13` citation'ı üretmesi
+
+---
+
+### Çıktı Kriterleri ✅
+
+- ✅ Her cevabın altında kullanılan kaynaklar, PDF'lerde sayfa numarasıyla görünüyor
+- ✅ Sayfa rozetine tıklayınca modele giden alıntı metni açılıyor
+- ✅ Dört kaynak tipi (KAP chunk / PDF tablosu / yfinance / haber) ayrı gösteriliyor
+- ✅ 83 pytest testi, tümü geçiyor (önceki 73)
+- ✅ `npx tsc --noEmit` hatasız

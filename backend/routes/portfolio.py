@@ -233,6 +233,7 @@ async def portfolio_ask(request: PortfolioAskRequest, current_user: dict = Depen
         "retrieved_count": result["retrieved_count"],
         "retry_count": result["retry_count"],
         "critic_feedback": result["critic_feedback"],
+        "sources": result.get("sources", []),
     }
 
 

@@ -90,4 +90,5 @@ async def compare_ask(request: CompareAskRequest, current_user: dict = Depends(e
         "retrieved_count": result["retrieved_count"],
         "retry_count": result["retry_count"],
         "critic_feedback": result["critic_feedback"],
+        "sources": result.get("sources", []),
     }

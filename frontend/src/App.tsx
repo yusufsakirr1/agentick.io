@@ -86,6 +86,7 @@ export default function App() {
           sub_tasks: res.sub_tasks,
           retrieved_count: res.retrieved_count,
           retry_count: res.retry_count,
+          sources: res.sources,
         },
       }
     } catch (e: unknown) {

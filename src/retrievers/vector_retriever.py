@@ -79,7 +79,9 @@ def search(query: str, ticker: str | None = None, top_k: int = 5) -> list[dict]:
                 "page": r.payload.get("page", 0),
                 "section": r.payload.get("section", "Genel"),
                 "source_file": r.payload.get("source_file", ""),
+                "chunk_index": r.payload.get("chunk_index"),
                 "score": round(r.score, 4),
+                "source_type": "vector",
                 "citation": (
                     f"KAP — {r.payload.get('ticker', '')} Faaliyet Raporu, "
                     f"s.{r.payload.get('page', '?')} ({r.payload.get('section', 'Genel')})"

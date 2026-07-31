@@ -13,3 +13,4 @@ class AgentState(TypedDict):
     critic_feedback: str               # "SUFFICIENT" veya "INSUFFICIENT: ..."
     retry_count: int
     final_answer: str
+    used_sources: list[dict]           # Synthesizer'a gerçekten verilen kaynaklar (UI'da gösterilir)

@@ -19,6 +19,27 @@ export interface UploadResult {
   error?: string
 }
 
+/** Yanıtın üretildiği kaynak — hangi dosya/sayfa/tablo kullanıldığını gösterir. */
+export interface AgentSource {
+  type: 'vector' | 'pdf' | 'sql' | 'news'
+  citation: string
+  ticker: string
+  score: number
+  snippet: string
+  /** vector + pdf */
+  source_file?: string | null
+  pages?: number[]
+  /** vector */
+  section?: string | null
+  /** sql */
+  tables?: string[]
+  period_range?: string | null
+  /** news */
+  title?: string | null
+  link?: string | null
+  published_at?: string | null
+}
+
 export interface AskResult {
   answer: string
   ticker: string
@@ -26,6 +47,7 @@ export interface AskResult {
   retrieved_count: number
   retry_count: number
   critic_feedback: string
+  sources: AgentSource[]
   error?: string
 }
 
@@ -64,6 +86,7 @@ export interface CompareAskResult {
   retrieved_count: number
   retry_count: number
   critic_feedback: string
+  sources: AgentSource[]
   error?: string
 }
 

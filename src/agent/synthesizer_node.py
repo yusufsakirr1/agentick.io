@@ -59,11 +59,15 @@ Yasal uyumluluk kuralları (SPK düzenlemesi — kesinlikle uy):
 
 
 MAX_SOURCES = 12
+SNIPPET_LENGTH = 240
 
-def _build_context(retrieved: list[dict]) -> str:
-    # Skoru yüksek olanları önce al, max 12 kaynak
-    sorted_results = sorted(retrieved, key=lambda r: r.get("score", 0), reverse=True)
-    top = sorted_results[:MAX_SOURCES]
+
+def _select_sources(retrieved: list[dict]) -> list[dict]:
+    """Skoru yüksek olanları önce al, max 12 kaynak."""
+    return sorted(retrieved, key=lambda r: r.get("score", 0), reverse=True)[:MAX_SOURCES]
+
+
+def _build_context(top: list[dict]) -> str:
     parts = []
     for i, r in enumerate(top, 1):
         citation = r.get("citation", f"Kaynak {i}")
@@ -72,12 +76,59 @@ def _build_context(retrieved: list[dict]) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+def _to_source(item: dict) -> dict:
+    """
+    Retriever çıktısını frontend'in gösterebileceği sade bir kaynak kaydına çevirir.
+    Kullanıcı, cevabın hangi dosya/sayfa/tablodan geldiğini burada görür.
+    """
+    text = (item.get("text") or "").strip()
+    snippet = text[:SNIPPET_LENGTH] + ("…" if len(text) > SNIPPET_LENGTH else "")
+    source_type = item.get("source_type") or "vector"
+
+    source: dict = {
+        "type": source_type,
+        "citation": item.get("citation", ""),
+        "ticker": item.get("ticker", ""),
+        "score": round(float(item.get("score") or 0), 4),
+        "snippet": snippet,
+    }
+
+    if source_type == "vector":
+        # KAP raporundan gelen metin chunk'ı — tek sayfa
+        page = item.get("page")
+        source["source_file"] = item.get("source_file") or None
+        source["pages"] = [page] if page else []
+        source["section"] = item.get("section") or None
+    elif source_type == "pdf":
+        # PDF'ten çıkarılmış tablo(lar) — birden fazla sayfa olabilir
+        source["source_file"] = item.get("source_file") or None
+        source["pages"] = item.get("pages") or []
+    elif source_type == "news":
+        source["title"] = item.get("title") or None
+        source["link"] = item.get("link") or None
+        source["published_at"] = item.get("published_at") or None
+    elif source_type == "sql":
+        source["tables"] = item.get("tables") or []
+        source["period_range"] = item.get("period_range") or None
+
+    return source
+
+
+def build_source_list(retrieved: list[dict]) -> list[dict]:
+    """Synthesizer'a verilen kaynakların UI için hazırlanmış listesi."""
+    return [_to_source(item) for item in _select_sources(retrieved)]
+
+
 def synthesizer_node(state: AgentState) -> dict:
     retrieved = state.get("retrieved", [])
     if not retrieved:
-        return {"final_answer": "İlgili veri bulunamadı. Lütfen önce PDF yükleyin ve finansal veri çekin."}
+        return {
+            "final_answer": "İlgili veri bulunamadı. Lütfen önce PDF yükleyin ve finansal veri çekin.",
+            "used_sources": [],
+        }
 
-    context = _build_context(retrieved)
+    top = _select_sources(retrieved)
+    context = _build_context(top)
     tickers = state.get("tickers", [state["ticker"]])
     is_multi = len(tickers) > 1
     system_prompt = SYSTEM_PROMPT_COMPARE if is_multi else SYSTEM_PROMPT
@@ -93,4 +144,7 @@ def synthesizer_node(state: AgentState) -> dict:
         }]
     )
 
-    return {"final_answer": response.content[0].text}
+    return {
+        "final_answer": response.content[0].text,
+        "used_sources": [_to_source(item) for item in top],
+    }

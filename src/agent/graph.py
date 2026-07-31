@@ -98,6 +98,7 @@ def run_agent(
         "critic_feedback": "",
         "retry_count": 0,
         "final_answer": "",
+        "used_sources": [],
     }
 
     result = graph.invoke(initial_state)
@@ -108,4 +109,5 @@ def run_agent(
         "retrieved_count": len(result.get("retrieved", [])),
         "retry_count": result.get("retry_count", 0),
         "critic_feedback": result.get("critic_feedback", ""),
+        "sources": result.get("used_sources", []),
     }

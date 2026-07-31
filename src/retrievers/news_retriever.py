@@ -83,6 +83,9 @@ def search(query: str, ticker: str = "THYAO", top_k: int = 5) -> list[dict]:
             "citation": citation,
             "score": _score_result(article, query, ticker),
             "source_type": "news",
+            "title": title,
+            "source": source,
+            "published_at": published,
             "link": link,
         })
 

@@ -54,4 +54,5 @@ async def ask(request: AskRequest, current_user: dict = Depends(enforce_rate_lim
         "retrieved_count": result["retrieved_count"],
         "retry_count": result["retry_count"],
         "critic_feedback": result["critic_feedback"],
+        "sources": result.get("sources", []),
     }

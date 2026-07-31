@@ -60,6 +60,7 @@ export default function PortfolioChat({ tickers }: Props) {
           sub_tasks: res.sub_tasks,
           retrieved_count: res.retrieved_count,
           retry_count: res.retry_count,
+          sources: res.sources,
         },
       }
       setMessages(prev => [...prev, aiMsg])

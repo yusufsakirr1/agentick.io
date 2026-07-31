@@ -1,5 +1,7 @@
 import ReactMarkdown from 'react-markdown'
 import AgentLogo from './AgentLogo'
+import SourceList from './SourceList'
+import type { AgentSource } from '../api/client'
 
 export interface MessageData {
   id: string
@@ -10,6 +12,7 @@ export interface MessageData {
     sub_tasks?: Array<{ query: string; type: string }>
     retrieved_count?: number
     retry_count?: number
+    sources?: AgentSource[]
   }
 }
 
@@ -58,8 +61,10 @@ export default function Message({ message }: { message: MessageData }) {
             {/* Kullanılan araçlar — tekrarsız */}
             {Array.from(new Set(message.meta.sub_tasks?.map(t => t.type) ?? [])).map(type => (
               <span key={type} className={`text-[11px] px-2 py-0.5 rounded-full font-medium
-                ${type === 'sql' ? 'bg-blue-50 text-blue-600' : 'bg-purple-50 text-purple-600'}`}>
-                {type === 'sql' ? '⚡ SQL' : '🔍 Vektör'}
+                ${type === 'sql' ? 'bg-blue-50 text-blue-600'
+                  : type === 'news' ? 'bg-amber-50 text-amber-600'
+                  : 'bg-purple-50 text-purple-600'}`}>
+                {type === 'sql' ? '⚡ SQL' : type === 'news' ? '📰 Haber' : '🔍 Vektör'}
               </span>
             ))}
             {(message.meta.retry_count ?? 0) > 1 && (
@@ -69,6 +74,9 @@ export default function Message({ message }: { message: MessageData }) {
             )}
           </div>
         )}
+
+        {/* Kaynaklar — cevabın hangi dosya/sayfa/tablodan geldiği */}
+        {!isUser && <SourceList sources={message.meta?.sources ?? []} />}
       </div>
     </div>
   )

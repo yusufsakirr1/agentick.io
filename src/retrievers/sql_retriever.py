@@ -228,22 +228,34 @@ def search(question: str, ticker: str = "THYAO", top_k: int = 5) -> list[dict]:
     tables = [t for t in all_tables if t in sql]
     source = ", ".join(tables) if tables else "finansal tablolar"
 
-    # pdf_tables için kaynak dosyasını citation'a ekle
+    # pdf_tables için kaynak dosyasını ve sayfa numaralarını citation'a ekle
     if "pdf_tables" in sql:
         files = list({r.get("source_file", "") for r in rows if r.get("source_file")})
         file_str = files[0] if len(files) == 1 else ", ".join(files)
-        citation = f"PDF — {ticker} {file_str}"
+        pages = sorted({int(r["page"]) for r in rows if r.get("page") is not None})
+        page_str = ", ".join(f"s.{p}" for p in pages)
+        citation = f"PDF — {ticker} {file_str}" + (f" ({page_str})" if page_str else "")
+        extra = {
+            "source_type": "pdf",
+            "source_file": file_str,
+            "pages": pages,
+        }
     else:
         # Tarih aralığını bul
         dates = [str(r.get("period_date", "")) for r in rows if r.get("period_date")]
         date_range = f"{dates[-1]} – {dates[0]}" if len(dates) > 1 else (dates[0] if dates else "")
         citation = f"yfinance — {ticker} {source} ({date_range})" if date_range else f"yfinance — {ticker} {source}"
+        extra = {
+            "source_type": "sql",
+            "tables": tables,
+            "period_range": date_range or None,
+        }
 
     return [{
         "text": text,
         "ticker": ticker,
         "citation": citation,
         "score": 1.0,
-        "source_type": "sql",
         "raw_rows": rows,
+        **extra,
     }]
