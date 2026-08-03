@@ -3,12 +3,14 @@ import AgentLogo from './AgentLogo'
 import Message, { MessageData } from './Message'
 import ThinkingIndicator from './ThinkingIndicator'
 import { askPortfolioQuestion } from '../api/client'
+import { useProfile } from '../contexts/ProfileContext'
 
 interface Props {
   tickers: string[]
 }
 
 export default function PortfolioChat({ tickers }: Props) {
+  const { profile } = useProfile()
   const [messages, setMessages] = useState<MessageData[]>([])
   const [text, setText] = useState('')
   const [loading, setLoading] = useState(false)
@@ -40,7 +42,7 @@ export default function PortfolioChat({ tickers }: Props) {
 
     try {
       const history = updatedMessages.map(m => ({ role: m.role, content: m.content }))
-      const res = await askPortfolioQuestion(q, tickers, history)
+      const res = await askPortfolioQuestion(q, tickers, history, profile)
 
       if (res.error) {
         const errMsg: MessageData = {

@@ -15,6 +15,7 @@ from backend.rate_limit import enforce_rate_limit
 from backend.services.metrics_utils import get_conn, build_ticker_metrics, DB_PATH
 
 from src.agent.graph import run_agent
+from src.agent.user_profile import sanitize_profile
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,7 @@ class CompareAskRequest(BaseModel):
     question: str
     tickers: list[str]
     conversation_history: list[dict] = []
+    profile: dict | None = None   # Kullanıcı tercihleri; sanitize_profile ile filtrelenir
 
 
 @router.post("/compare/ask")
@@ -73,7 +75,10 @@ async def compare_ask(request: CompareAskRequest, current_user: dict = Depends(e
 
     try:
         result = await asyncio.wait_for(
-            asyncio.to_thread(run_agent, question, tickers[0], request.conversation_history, tickers),
+            asyncio.to_thread(
+                run_agent, question, tickers[0], request.conversation_history, tickers,
+                sanitize_profile(request.profile),
+            ),
             timeout=AGENT_TIMEOUT,
         )
     except asyncio.TimeoutError:

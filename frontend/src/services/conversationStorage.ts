@@ -9,41 +9,65 @@ export interface Conversation {
   updatedAt: string
 }
 
-const KEY = 'agentick_conversations'
+/**
+ * Sohbetler kullanıcı bazında saklanır: `agentick_conversations_{uid}`.
+ *
+ * Eskiden tek bir `agentick_conversations` anahtarı vardı; aynı bilgisayarda
+ * ikinci bir hesapla giriş yapan kullanıcı öncekinin tüm sohbetlerini görüyordu.
+ */
+const LEGACY_KEY = 'agentick_conversations'
 
-function load(): Conversation[] {
+function keyFor(uid: string): string {
+  return `${LEGACY_KEY}_${uid}`
+}
+
+function load(uid: string): Conversation[] {
   try {
-    return JSON.parse(localStorage.getItem(KEY) ?? '[]')
+    return JSON.parse(localStorage.getItem(keyFor(uid)) ?? '[]')
   } catch {
     return []
   }
 }
 
-function save(conversations: Conversation[]) {
-  localStorage.setItem(KEY, JSON.stringify(conversations))
+function save(uid: string, conversations: Conversation[]) {
+  localStorage.setItem(keyFor(uid), JSON.stringify(conversations))
 }
 
-export function getAll(): Conversation[] {
-  return load().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+/**
+ * Anahtarsız eski kayıtları ilk giriş yapan kullanıcıya bir kereliğine taşır.
+ * Taşıma sonrası eski anahtar silinir, böylece ikinci kullanıcıya sızmaz.
+ */
+export function migrateLegacy(uid: string) {
+  const legacy = localStorage.getItem(LEGACY_KEY)
+  if (legacy === null) return
+
+  if (localStorage.getItem(keyFor(uid)) === null) {
+    localStorage.setItem(keyFor(uid), legacy)
+  }
+  localStorage.removeItem(LEGACY_KEY)
 }
 
-export function getById(id: string): Conversation | null {
-  return load().find(c => c.id === id) ?? null
+export function getAll(uid: string): Conversation[] {
+  return load(uid).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
 }
 
-export function upsert(conversation: Conversation) {
-  const all = load()
+export function getById(uid: string, id: string): Conversation | null {
+  return load(uid).find(c => c.id === id) ?? null
+}
+
+export function upsert(uid: string, conversation: Conversation) {
+  const all = load(uid)
   const idx = all.findIndex(c => c.id === conversation.id)
   if (idx >= 0) {
     all[idx] = { ...conversation, updatedAt: new Date().toISOString() }
   } else {
     all.unshift(conversation)
   }
-  save(all)
+  save(uid, all)
 }
 
-export function remove(id: string) {
-  save(load().filter(c => c.id !== id))
+export function remove(uid: string, id: string) {
+  save(uid, load(uid).filter(c => c.id !== id))
 }
 
 export function createNew(ticker: string): Conversation {

@@ -1,0 +1,24 @@
+rules_version = '2';
+
+// agentick.io Firestore güvenlik kuralları.
+//
+// Firebase konsolunda Firestore "production mode" ile açıldıysa varsayılan kural
+// HER ŞEYİ REDDEDER — bu durumda portföy okuma/yazma sessizce başarısız olur ve
+// kullanıcı portföyünü her girişte boş görür. Bu dosyayı konsola yapıştırın veya
+// `firebase deploy --only firestore:rules` ile gönderin.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Kullanıcı yalnızca kendi belgelerine erişebilir.
+    // Kapsam: users/{uid}/portfolios/default ve users/{uid}/profile/default
+    match /users/{uid}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // Başka her şey kapalı.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

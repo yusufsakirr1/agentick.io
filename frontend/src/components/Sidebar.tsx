@@ -15,17 +15,21 @@ const NAV_ITEMS = [
 interface Props {
   conversations: Conversation[]
   activeId: string | null
+  profileSet: boolean
   onNewChat: () => void
   onSelectConversation: (id: string) => void
   onDeleteConversation: (id: string) => void
+  onOpenProfile: () => void
 }
 
 export default function Sidebar({
   conversations,
   activeId,
+  profileSet,
   onNewChat,
   onSelectConversation,
   onDeleteConversation,
+  onOpenProfile,
 }: Props) {
   const navigate = useNavigate()
   const { pathname } = useLocation()
@@ -144,29 +148,44 @@ export default function Sidebar({
       {/* Alt kısım */}
       <div className="px-4 py-4 border-t border-gray-100">
         <div className="flex items-center gap-3 px-3 py-3 rounded-2xl">
-          {user?.photoURL ? (
-            <img
-              src={user.photoURL}
-              alt=""
-              className="w-10 h-10 rounded-full flex-shrink-0"
-              referrerPolicy="no-referrer"
-            />
-          ) : (
-            <div className="w-10 h-10 rounded-full bg-black flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
-              {user?.displayName?.[0] ?? 'U'}
+          {/* Profil alanına tıklayınca tercihler açılır */}
+          <button
+            onClick={onOpenProfile}
+            title="Yatırımcı profilini düzenle"
+            className="flex items-center gap-3 min-w-0 flex-1 text-left rounded-xl
+                       hover:bg-gray-50 -mx-1 px-1 py-1 transition-colors cursor-pointer"
+          >
+            <div className="relative flex-shrink-0">
+              {user?.photoURL ? (
+                <img
+                  src={user.photoURL}
+                  alt=""
+                  className="w-10 h-10 rounded-full"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="w-10 h-10 rounded-full bg-black flex items-center justify-center text-white text-sm font-bold">
+                  {user?.displayName?.[0] ?? 'U'}
+                </div>
+              )}
+              {/* Profil doluysa yeşil nokta, boşsa "ayarla" çağrısı */}
+              {profileSet && (
+                <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full
+                                 bg-emerald-500 border-2 border-white" />
+              )}
             </div>
-          )}
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold text-gray-900 truncate">
-              {user?.displayName ?? 'Kullanıcı'}
-            </p>
-            <p className="text-xs text-gray-400 mt-0.5 truncate">
-              {user?.email ?? ''}
-            </p>
-          </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-gray-900 truncate">
+                {user?.displayName ?? 'Kullanıcı'}
+              </p>
+              <p className={`text-xs mt-0.5 truncate ${profileSet ? 'text-gray-400' : 'text-gray-900 font-medium'}`}>
+                {profileSet ? (user?.email ?? '') : 'Profilini ayarla'}
+              </p>
+            </div>
+          </button>
           <button
             onClick={signOut}
-            className="p-2 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors cursor-pointer"
+            className="p-2 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors cursor-pointer flex-shrink-0"
             title="Çıkış Yap"
           >
             <LogOut className="w-4 h-4" />

@@ -1,4 +1,5 @@
 import { auth } from '../config/firebase'
+import type { UserProfile } from '../services/profileService'
 
 const BASE_URL = '/api'
 
@@ -120,12 +121,15 @@ export async function askQuestion(
   question: string,
   ticker: string,
   conversationHistory: Array<{ role: string; content: string }> = [],
+  profile?: UserProfile,
 ): Promise<AskResult> {
   const authHeaders = await getAuthHeaders()
   const res = await fetch(`${BASE_URL}/ask`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders },
-    body: JSON.stringify({ question, ticker, conversation_history: conversationHistory }),
+    body: JSON.stringify({
+      question, ticker, conversation_history: conversationHistory, profile: profile ?? null,
+    }),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
@@ -238,12 +242,15 @@ export async function askPortfolioQuestion(
   question: string,
   tickers: string[],
   conversationHistory: Array<{ role: string; content: string }> = [],
+  profile?: UserProfile,
 ): Promise<CompareAskResult> {
   const authHeaders = await getAuthHeaders()
   const res = await fetch(`${BASE_URL}/portfolio/ask`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders },
-    body: JSON.stringify({ question, tickers, conversation_history: conversationHistory }),
+    body: JSON.stringify({
+      question, tickers, conversation_history: conversationHistory, profile: profile ?? null,
+    }),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
@@ -270,12 +277,15 @@ export async function askCompareQuestion(
   question: string,
   tickers: string[],
   conversationHistory: Array<{ role: string; content: string }> = [],
+  profile?: UserProfile,
 ): Promise<CompareAskResult> {
   const authHeaders = await getAuthHeaders()
   const res = await fetch(`${BASE_URL}/compare/ask`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders },
-    body: JSON.stringify({ question, tickers, conversation_history: conversationHistory }),
+    body: JSON.stringify({
+      question, tickers, conversation_history: conversationHistory, profile: profile ?? null,
+    }),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))

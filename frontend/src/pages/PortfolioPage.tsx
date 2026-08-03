@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { AlertTriangle, RefreshCw } from 'lucide-react'
 import AgentLogo from '../components/AgentLogo'
 import PortfolioManager from '../components/PortfolioManager'
 import PortfolioSummaryCards from '../components/PortfolioSummaryCards'
@@ -14,6 +15,7 @@ import {
   updateHolding,
   type Holding,
 } from '../services/portfolioService'
+import { describeFirestoreError, withFirestoreTimeout } from '../services/firebaseError'
 import {
   fetchPortfolioMetrics,
   type PortfolioSummary,
@@ -32,25 +34,44 @@ export default function PortfolioPage() {
   const [warnings, setWarnings] = useState<string[]>([])
   const [dividends, setDividends] = useState<DividendEntry[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [storageError, setStorageError] = useState<string | null>(null)
+  const [portfolioLoading, setPortfolioLoading] = useState(true)
 
   const tickers = holdings.map(h => h.ticker)
 
-  // Firestore'dan portföy yükle
-  useEffect(() => {
+  // Firestore'dan portföy yükle.
+  // Okuma başarısız olursa holdings'i BOŞALTMIYORUZ — kullanıcıya "portföyün
+  // silindi" izlenimi veren eski davranış buydu. Bunun yerine hata gösterilir.
+  const loadPortfolio = useCallback(async () => {
     if (!user) return
-    getPortfolio(user.uid)
-      .then(setHoldings)
-      .catch(() => setHoldings([]))
+    setPortfolioLoading(true)
+    try {
+      setHoldings(await withFirestoreTimeout(getPortfolio(user.uid)))
+      setStorageError(null)
+    } catch (e) {
+      setStorageError(`Portföyünüz yüklenemedi. ${describeFirestoreError(e)}`)
+    } finally {
+      setPortfolioLoading(false)
+    }
   }, [user])
 
-  // Portföy değiştiğinde Firestore'a kaydet
+  useEffect(() => {
+    loadPortfolio()
+  }, [loadPortfolio])
+
+  // Portföy değiştiğinde Firestore'a kaydet.
+  // Yazma başarısız olursa kullanıcı uyarılır; aksi halde ekranda duran hisseler
+  // kaydedilmiş sanılır ve sonraki girişte kaybolur.
   const saveHoldings = useCallback(async (newHoldings: Holding[]) => {
     if (!user) return
     setHoldings(newHoldings)
     try {
-      await updateHolding(user.uid, newHoldings)
-    } catch {
-      // silently fail — local state is source of truth during session
+      await withFirestoreTimeout(updateHolding(user.uid, newHoldings))
+      setStorageError(null)
+    } catch (e) {
+      setStorageError(
+        `Değişiklik kaydedilemedi — bu sayfadan çıkarsanız kaybolur. ${describeFirestoreError(e)}`,
+      )
     }
   }, [user])
 
@@ -130,6 +151,24 @@ export default function PortfolioPage() {
       <div className="flex-1 overflow-y-auto px-6 py-6">
         <div className="max-w-6xl mx-auto space-y-5">
 
+          {/* Kalıcılık hatası — portföy kaydedilemiyor/yüklenemiyorsa sessiz kalma */}
+          {storageError && (
+            <div className="flex items-start gap-3 text-sm bg-amber-50 border border-amber-200
+                            text-amber-900 px-4 py-3 rounded-xl">
+              <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" strokeWidth={2} />
+              <p className="flex-1 leading-relaxed">{storageError}</p>
+              <button
+                onClick={loadPortfolio}
+                className="flex-shrink-0 flex items-center gap-1 text-xs font-medium
+                           px-2.5 py-1 rounded-lg bg-white border border-amber-200
+                           hover:bg-amber-100 transition-colors cursor-pointer"
+              >
+                <RefreshCw className="w-3 h-3" />
+                Yeniden dene
+              </button>
+            </div>
+          )}
+
           {/* Row 1: Portföy Sepeti */}
           <PortfolioManager
             holdings={holdings}
@@ -190,8 +229,9 @@ export default function PortfolioPage() {
             </>
           )}
 
-          {/* Empty state */}
-          {!hasData && (
+          {/* Empty state — yükleme sürerken veya okuma hatası varken gösterme,
+              aksi halde "portföyün boş" yanılgısı doğuyor */}
+          {!hasData && !portfolioLoading && !storageError && (
             <div className="text-center py-16">
               <div className="w-16 h-16 mx-auto mb-4 bg-gray-100 rounded-2xl flex items-center justify-center">
                 <AgentLogo size={40} color="#9ca3af" />

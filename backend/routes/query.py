@@ -12,6 +12,7 @@ from backend.constants import validate_ticker
 from backend.rate_limit import enforce_rate_limit
 
 from src.agent.graph import run_agent
+from src.agent.user_profile import sanitize_profile
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ class AskRequest(BaseModel):
     question: str
     ticker: str
     conversation_history: list[dict] = []
+    profile: dict | None = None   # Kullanıcı tercihleri; sanitize_profile ile filtrelenir
 
 
 @router.post("/ask")
@@ -37,7 +39,10 @@ async def ask(request: AskRequest, current_user: dict = Depends(enforce_rate_lim
 
     try:
         result = await asyncio.wait_for(
-            asyncio.to_thread(run_agent, question, ticker, request.conversation_history),
+            asyncio.to_thread(
+                run_agent, question, ticker, request.conversation_history,
+                None, sanitize_profile(request.profile),
+            ),
             timeout=AGENT_TIMEOUT,
         )
     except asyncio.TimeoutError:

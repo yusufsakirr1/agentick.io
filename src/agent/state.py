@@ -14,3 +14,4 @@ class AgentState(TypedDict):
     retry_count: int
     final_answer: str
     used_sources: list[dict]           # Synthesizer'a gerçekten verilen kaynaklar (UI'da gösterilir)
+    user_profile: dict                 # Cevabın vurgusunu belirleyen kullanıcı tercihleri (bkz. user_profile.py)

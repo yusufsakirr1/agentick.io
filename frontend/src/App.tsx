@@ -8,6 +8,8 @@ import LoginPage from './pages/LoginPage'
 import { MessageData } from './components/Message'
 import { askQuestion } from './api/client'
 import { useAuth } from './contexts/AuthContext'
+import { useProfile } from './contexts/ProfileContext'
+import ProfileModal from './components/ProfileModal'
 import * as store from './services/conversationStorage'
 import type { Conversation } from './services/conversationStorage'
 
@@ -18,20 +20,33 @@ export default function App() {
   const [defaultTicker, setDefaultTicker] = useState('THYAO')
   const [loading, setLoading] = useState(false)
   const [suggestion, setSuggestion] = useState<string | undefined>()
+  const [profileOpen, setProfileOpen] = useState(false)
+  const { profile, profileSet, setProfile } = useProfile()
 
-  // Kayıtlı konuşmaları localStorage'dan yükle
+  const uid = user?.uid ?? null
+
+  // Kayıtlı konuşmaları localStorage'dan yükle — kullanıcıya özel anahtarla.
+  // Kullanıcı değişince aktif sohbet de sıfırlanır ki önceki hesabın sohbeti açık kalmasın.
   useEffect(() => {
-    if (user) setConversations(store.getAll())
-  }, [user])
+    if (!uid) {
+      setConversations([])
+      setActiveId(null)
+      return
+    }
+    store.migrateLegacy(uid)
+    setConversations(store.getAll(uid))
+    setActiveId(null)
+  }, [uid])
 
   const active = conversations.find(c => c.id === activeId) ?? null
   const messages = active?.messages ?? []
   const ticker = active?.ticker ?? defaultTicker
 
   const persist = useCallback((conversation: Conversation) => {
-    store.upsert(conversation)
-    setConversations(store.getAll())
-  }, [])
+    if (!uid) return
+    store.upsert(uid, conversation)
+    setConversations(store.getAll(uid))
+  }, [uid])
 
   const handleTickerChange = useCallback((t: string) => {
     setDefaultTicker(t)
@@ -49,10 +64,11 @@ export default function App() {
   }, [])
 
   const handleDeleteConversation = useCallback((id: string) => {
-    store.remove(id)
-    setConversations(store.getAll())
+    if (!uid) return
+    store.remove(uid, id)
+    setConversations(store.getAll(uid))
     setActiveId(prev => (prev === id ? null : prev))
-  }, [])
+  }, [uid])
 
   const handleSend = async (question: string, t: string) => {
     setSuggestion(undefined)
@@ -76,7 +92,7 @@ export default function App() {
     let reply: MessageData
     try {
       const history = withUserMessage.messages.map(m => ({ role: m.role, content: m.content }))
-      const res = await askQuestion(question, t, history)
+      const res = await askQuestion(question, t, history, profile)
       reply = {
         id: crypto.randomUUID(),
         role: 'assistant',
@@ -120,10 +136,16 @@ export default function App() {
       <Sidebar
         conversations={conversations}
         activeId={activeId}
+        profileSet={profileSet}
         onNewChat={handleNewChat}
         onSelectConversation={handleSelectConversation}
         onDeleteConversation={handleDeleteConversation}
+        onOpenProfile={() => setProfileOpen(true)}
       />
+
+      {profileOpen && (
+        <ProfileModal onClose={() => setProfileOpen(false)} onSaved={setProfile} />
+      )}
 
       <div className="flex-1 flex flex-col min-w-0 bg-white rounded-2xl overflow-hidden shadow-sm">
         <Routes>

@@ -1738,3 +1738,167 @@ bulduğu ham sonuçların tamamından değil. Kullanıcı, cevabı üreten alın
 - ✅ Dört kaynak tipi (KAP chunk / PDF tablosu / yfinance / haber) ayrı gösteriliyor
 - ✅ 83 pytest testi, tümü geçiyor (önceki 73)
 - ✅ `npx tsc --noEmit` hatasız
+
+---
+
+## 2026-08-03 — Pazartesi
+**Kalıcılık Düzeltmesi ve Yatırımcı Profili**
+
+Kullanıcı "portföyümü giriyorum, çıkıp girince siliniyor" dedi. İnceleme sonucu
+portföyün **aslında Firestore'a yazıldığı**, sorunun hataların sessizce yutulması
+olduğu ortaya çıktı. Aynı oturumda sohbet geçmişindeki bir gizlilik açığı kapatıldı
+ve agent'ı kişiselleştiren yatırımcı profili eklendi.
+
+---
+
+### Adım 1 — Portföy "Siliniyor" Sorunu
+
+**Teşhis:** `portfolioService.ts` portföyü `users/{uid}/portfolios/default` altında
+tutuyor ve giriş Google ile olduğu için `uid` sabit — mimari doğruydu. Sorun
+`PortfolioPage.tsx`'teki iki sessiz `catch`'ti:
+
+- Okuma hatası → `.catch(() => setHoldings([]))` — kullanıcı **boş portföy** görüyor,
+  hiçbir uyarı yok. "Silinmiş" izlenimi tam olarak buradan geliyordu.
+- Yazma hatası → boş `catch` — ekranda hisse duruyor ama Firestore'a hiç gitmemiş;
+  sonraki girişte kayboluyor.
+
+**Çözüm:**
+- `services/firebaseError.ts` (yeni): Firestore hata kodlarını Türkçe, eyleme dönük
+  mesajlara çevirir (`permission-denied`, `unavailable`, `failed-precondition` vb.)
+- Okuma hatasında `holdings` **boşaltılmıyor**; kehribar renkli uyarı + "Yeniden dene"
+- Yazma hatasında "bu sayfadan çıkarsanız kaybolur" uyarısı
+- Empty state artık yükleme sırasında ve hata varken gizli — yanlış "portföyün boş" mesajı yok
+- `firestore.rules` (yeni) repoya eklendi (veritabanı oluşturulduktan sonra yüklenecek)
+
+**Kök neden (kesin):** Firestore REST API'ye doğrudan sorgu atıldığında proje
+`agentickio-5ed5f` için şu cevap geldi:
+
+```
+404 NOT_FOUND — The database (default) does not exist for project agentickio-5ed5f
+```
+
+Yani **Firestore veritabanı hiç oluşturulmamış**. Portföy silinmiyordu; hiçbir zaman
+yazılmamıştı. İlk tahmin olan "güvenlik kuralları reddediyor" senaryosu yanlıştı —
+kurallar ancak veritabanı var olduğunda devreye girer.
+
+---
+
+### Adım 2 — Sohbet Geçmişi Gizlilik Açığı
+
+**Sorun:** `conversationStorage.ts` tüm sohbetleri tek bir `agentick_conversations`
+anahtarında tutuyordu — **uid'e göre ayrılmamış**. Aynı bilgisayarda ikinci bir hesapla
+giriş yapan kullanıcı, öncekinin bütün sohbetlerini görüyordu.
+
+**Çözüm:**
+- Anahtar `agentick_conversations_{uid}` oldu; tüm fonksiyonlar `uid` alıyor
+- `migrateLegacy()` — eski anahtarsız kayıtlar ilk kullanıcıya bir kereliğine taşınır,
+  ardından eski anahtar silinir (ikinci kullanıcıya sızmasın)
+- `App.tsx`: kullanıcı değişince konuşma listesi ve aktif sohbet sıfırlanıyor
+
+---
+
+### Adım 3 — Yatırımcı Profili (Kişiselleştirme)
+
+Profil, cevabın **hangi veriye ağırlık vereceğini** ve dilin ne kadar teknik olacağını
+belirler. Dört alan: yaklaşım (temkinli/dengeli/agresif), vade (kısa/orta/uzun),
+ilgi alanları (temettü/büyüme/değerleme/likidite, çoklu), finans bilgisi
+(başlangıç/orta/ileri).
+
+**Backend — `src/agent/user_profile.py` (yeni):**
+- `sanitize_profile()` — istemciden gelen profili beyaz listeye indirger; bilinmeyen
+  anahtar/değer sessizce atılır. Profil serbest metin taşımadığı için prompt injection
+  yüzeyi yok.
+- `apply_profile()` — talimatı system prompt'a **uyumluluk bloğundan ÖNCE** yerleştirir.
+  Böylece SPK kuralları prompt'un son bölümü olarak kalır ve profil onları gölgeleyemez.
+- Talimatın kendisi de açıkça yasaklıyor: tercihler "uygunluk değerlendirmesi" veya
+  alım-satım yönlendirmesine dönüştürülemez.
+- `state.py` `user_profile`, `graph.py` `run_agent(..., user_profile=)`, üç route'ta
+  `profile` alanı + `sanitize_profile` çağrısı
+
+**Frontend:**
+- `services/profileService.ts` (yeni) — `users/{uid}/profile/default`, etiketler
+- `contexts/ProfileContext.tsx` (yeni) — profil bir kez yüklenip sohbet / karşılaştırma
+  / portföy sayfalarının üçüne birden dağıtılıyor
+- `components/ProfileModal.tsx` (yeni) — Sidebar'daki kullanıcı bloğuna tıklayınca açılır;
+  seçili seçeneğe tekrar basmak tercihi temizler
+- Sidebar: profil doluysa avatarda yeşil nokta, boşsa "Profilini ayarla" çağrısı
+- `client.ts`: üç ask fonksiyonu da opsiyonel `profile` gönderiyor
+
+---
+
+### Adım 4 — Doğrulama
+
+Backend ayağa kaldırılıp aynı soru iki kez soruldu:
+
+| | Profilsiz | Temkinli + likidite + yeni başlayan |
+|---|---|---|
+| Vurgu | Piyasa değeri, hisse fiyat aralığı, FAVÖK | Ciro, vergi öncesi kâr, kapasite kullanımı |
+| Ek bölüm | — | "Kredi Derecelendirmesi ve **Finansal Yapı**" (bilanço/finansman politikası) |
+
+Uyumluluk dipnotu her iki cevapta da yerinde.
+
+---
+
+### Not — Veri Etiketleme Hatası (kod hatası değil)
+
+Test sırasında THYAO sorusuna Tüpraş verisi geldiği görüldü. Kaynak listesi sebebi
+anında gösterdi: `THYAO_tupras-2025-entegre-faaliyet-raporu (1).pdf` — Tüpraş raporu
+THYAO seçiliyken yüklenmiş. Retriever doğru çalışıyor, veri yanlış etiketlenmiş.
+Bu kaydın yeniden yüklenmesi gerekiyor. (Kaynak gösterimi özelliğinin ilk somut faydası.)
+
+---
+
+### Çıktı Kriterleri ✅
+
+- ✅ Portföy okuma/yazma hataları kullanıcıya gösteriliyor, sessiz veri kaybı yok
+- ✅ `firestore.rules` repoda — kalıcılık sorununun kök nedeni dokümante
+- ✅ Sohbetler kullanıcı bazında ayrı; eski kayıtlar tek seferlik taşınıyor
+- ✅ Profil cevabın vurgusunu değiştiriyor, SPK uyumluluk bloğu bozulmuyor
+- ✅ 105 pytest testi, tümü geçiyor (önceki 83) — 22 yeni profil testi
+- ✅ `npx tsc --noEmit` hatasız
+
+---
+
+### Adım 5 — Profil Modalı Sonsuz "Yükleniyor" (aynı kök neden)
+
+**Sorun:** Profil modalı açılınca dönen spinner hiç durmuyordu. İki sebep vardı:
+
+1. Modal, `ProfileContext`'te zaten yüklenmiş profili **ikinci kez** çekiyordu
+2. Firestore SDK, var olmayan veritabanına yaptığı isteği sessizce yeniden denemeye
+   devam ediyor; promise ne çözülüyor ne reddediliyor → spinner sonsuza dek dönüyor
+
+**Çözüm:**
+- `withFirestoreTimeout()` (`firebaseError.ts`) — 8 saniyelik üst sınır, aşılırsa
+  `deadline-exceeded` hatasına çevrilir. Portföy okuma/yazma da bu sarmalayıcıdan geçiyor.
+- Modal artık kendi isteğini atmıyor; `ProfileContext`'ten okuyor → anında açılıyor
+- `ProfileContext` `loading` / `error` / `reload` sunuyor; hata modalda
+  "Yeniden dene" butonuyla gösteriliyor
+
+---
+
+### Adım 6 — Firestore Kurulumu ve Uçtan Uca Doğrulama
+
+Veritabanı Firebase konsolundan oluşturuldu (Standard edition, `(default)` ID) ve
+`firestore.rules` içeriği Rules sekmesine yüklenip yayınlandı.
+
+Doğrulama zinciri:
+
+| Aşama | Kanıt |
+|---|---|
+| Başlangıç | REST sorgusu `404 NOT_FOUND — database (default) does not exist` |
+| Veritabanı oluşturuldu | Aynı sorgu `403 PERMISSION_DENIED` (kimliksiz istek reddediliyor) |
+| Kurallar yayınlandı | Rules Playground: `get /users/{uid}/portfolios/default`, authenticated → **Simulated read allowed** |
+| Uygulama | Hard refresh sonrası AKBNK + ARCLK eklendi, uyarı bandı çıkmadı |
+
+**Ara not:** Kurallar yayınlanmadan önce açık olan sekme yazma denemişti; o an
+varsayılan `if false` kuralı yürürlükteydi ve "izin reddedildi" bandı ekranda kalmıştı.
+Banner yeni bir denemeye kadar temizlenmiyor — hard refresh ile çözüldü. Yeni hata
+gösterimi olmasaydı bu durum yine sessiz bir veri kaybı olarak geçecekti.
+
+---
+
+### Sıradaki
+
+- [ ] Yanlış etiketlenmiş THYAO/Tüpraş PDF kaydının temizlenip yeniden yüklenmesi
+- [ ] Deployment (Railway + Vercel) — `ENVIRONMENT=production`, `FIREBASE_PRIVATE_KEY`,
+      `CORS_ORIGINS` zorunlu

@@ -73,6 +73,7 @@ def run_agent(
     ticker: str,
     conversation_history: list[dict] | None = None,
     tickers: list[str] | None = None,
+    user_profile: dict | None = None,
 ) -> dict:
     """
     LangGraph agent'ı çalıştırır ve sonucu döndürür.
@@ -99,6 +100,7 @@ def run_agent(
         "retry_count": 0,
         "final_answer": "",
         "used_sources": [],
+        "user_profile": user_profile or {},
     }
 
     result = graph.invoke(initial_state)

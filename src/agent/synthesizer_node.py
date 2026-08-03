@@ -8,6 +8,7 @@ import anthropic
 from dotenv import load_dotenv
 
 from src.agent.state import AgentState
+from src.agent.user_profile import apply_profile
 
 load_dotenv()
 
@@ -131,7 +132,8 @@ def synthesizer_node(state: AgentState) -> dict:
     context = _build_context(top)
     tickers = state.get("tickers", [state["ticker"]])
     is_multi = len(tickers) > 1
-    system_prompt = SYSTEM_PROMPT_COMPARE if is_multi else SYSTEM_PROMPT
+    base_prompt = SYSTEM_PROMPT_COMPARE if is_multi else SYSTEM_PROMPT
+    system_prompt = apply_profile(base_prompt, state.get("user_profile"))
 
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
     response = client.messages.create(

@@ -19,6 +19,7 @@ from backend.services.metrics_utils import (
 )
 
 from src.agent.graph import run_agent
+from src.agent.user_profile import sanitize_profile
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,7 @@ class PortfolioAskRequest(BaseModel):
     question: str
     tickers: list[str]
     conversation_history: list[dict] = []
+    profile: dict | None = None   # Kullanıcı tercihleri; sanitize_profile ile filtrelenir
 
 
 class PortfolioNewsRequest(BaseModel):
@@ -215,7 +217,9 @@ async def portfolio_ask(request: PortfolioAskRequest, current_user: dict = Depen
     try:
         result = await asyncio.wait_for(
             asyncio.to_thread(
-                run_agent, question, tickers[0], request.conversation_history, tickers if len(tickers) > 1 else None
+                run_agent, question, tickers[0], request.conversation_history,
+                tickers if len(tickers) > 1 else None,
+                sanitize_profile(request.profile),
             ),
             timeout=AGENT_TIMEOUT,
         )
