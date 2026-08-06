@@ -1902,3 +1902,295 @@ gösterimi olmasaydı bu durum yine sessiz bir veri kaybı olarak geçecekti.
 - [ ] Yanlış etiketlenmiş THYAO/Tüpraş PDF kaydının temizlenip yeniden yüklenmesi
 - [ ] Deployment (Railway + Vercel) — `ENVIRONMENT=production`, `FIREBASE_PRIVATE_KEY`,
       `CORS_ORIGINS` zorunlu
+
+---
+
+## 2026-08-04 — Salı
+**Yasal Zemin / Gün 1 — SPK Sınırı: Neyi Satabiliriz, Neyi Satamayız**
+
+> ⚠️ **Bu üç günlük bölüm hukuki görüş değildir.** Aşağıdakiler mevzuat metinleri ve
+> ikincil kaynaklar üzerinden çıkarılmış çalışma notlarıdır. Ticarileşme öncesi sermaye
+> piyasası hukuku alanında çalışan bir avukatla ve gerekirse SPK'ya yazılı görüş
+> başvurusuyla teyit edilmelidir. Kaynaklar her bölümün sonunda.
+
+Kod tarafı Sprint 3 ile oturdu. Ürünü ücretli hale getirmeden önce cevaplanması gereken
+soru şu: **agentick.io'nun yaptığı iş SPK'ya göre lisans gerektiriyor mu?**
+
+---
+
+### Bulgu 1 — İki ayrı faaliyet var, aradaki çizgi "kişiye özel" olmak
+
+Sermaye piyasası mevzuatı bu ikisini keskin biçimde ayırıyor:
+
+| | Genel yatırım tavsiyesi | Yatırım danışmanlığı |
+|---|---|---|
+| Muhatap | Belirli bir kişi/gruba **yönelik değil** | Kişiye özel |
+| Girdi | Kamuya açık veri, genel analiz | Müşterinin risk ve getiri tercihleri |
+| Yetki belgesi | Gerekmiyor (koşullu) | **Zorunlu** |
+| Örnek | "X'in net marjı %12,08" | "Sizin profilinize X uygun" |
+
+Belirleyici ölçüt niyet değil, **çıktının kişiselleşme derecesi**. Aynı cümle, alıcının
+risk profiline göre üretildiği anda faaliyet sınıfı değişiyor.
+
+Ölçek fikri vermesi açısından: TSPB üye listesine göre 44 bankadan 2'si, 80 aracı
+kurumdan 62'si, 53 portföy yönetim şirketinden 19'u yatırım danışmanlığı yetki belgesine
+sahip. Yani belge sıradan bir kayıt işlemi değil, kurumsal bir eşik.
+
+---
+
+### Bulgu 2 — Mevcut kod bu çizginin doğru tarafında, ama teğet geçiyor
+
+`synthesizer_node.py` içindeki uyumluluk bloğu (Faz 3'ten beri var) tam olarak bu ayrımı
+koruyor: al/sat/tut yasak, değer yargısı yasak, hedef fiyat yasak, "X daha iyi" yerine
+"X'in net marjı daha yüksek". Bu, ürünü **genel yatırım tavsiyesi** tarafında tutuyor.
+
+Ancak 3 Ağustos'ta eklenen **yatırımcı profili** özelliği tam da bu sınırın üzerinde
+duruyor. `user_profile.py` bunu bilinçli olarak şöyle sınırlıyor:
+
+- Profil yalnızca **hangi verinin öne çıkacağını** ve dilin teknik seviyesini belirliyor
+- `apply_profile()` talimatı uyumluluk bloğundan **önce** yerleştiriyor; SPK kuralları
+  prompt'un son sözü olarak kalıyor
+- Talimatın kendisi açıkça yasaklıyor: tercihler "uygunluk değerlendirmesine" veya
+  alım-satım yönlendirmesine dönüştürülemez
+
+**Değerlendirme:** Bu tasarım savunulabilir görünüyor — profil bir *sunum filtresi*,
+*tavsiye üreteci* değil. Ama sınır ince. Riskli olacak yön: profile göre **hisse
+sıralamak, filtrelemek veya öneri listesi üretmek**. Bunlar "kişiye özel" tanımına
+girer. Screening/Alert özelliği (roadmap'te var) tasarlanırken bu eşiğe dikkat edilmeli.
+
+---
+
+### Bulgu 3 — Yapay zekâ için net bir çerçeve henüz yok
+
+Türkiye'de "algoritmik tavsiye" ile "kişisel finansal danışmanlık" arasındaki sınır
+düzenleyici metinlerde tanımlanmış değil. AB tarafında AI Act finansal yapay zekâyı
+yüksek riskli sistem sayarken, Türkiye'de karşılığı henüz oluşmamış. Robo-danışmanlık
+alanında bankalar ve fintech'ler faaliyette (QNB Akıllı Robo vb.) ama bunlar lisanslı
+kuruluşların şemsiyesi altında.
+
+**Pratik sonuç:** Boşluk, serbestlik anlamına gelmiyor — aksine, ihtilaf halinde
+mevcut yatırım danışmanlığı tanımına göre değerlendirilme riski var. Muhafazakâr
+konumlanma doğru tercih.
+
+---
+
+### Bu günün kararı
+
+Ürün **"araştırma asistanı"** olarak konumlanacak, "danışman" olarak değil. Bu karar
+yarınki veri/gizlilik analizini ve perşembe günkü fiyatlama modelini doğrudan
+kısıtlıyor: kişiselleştirme satılabilir bir özellik ama **tavsiye** olarak
+pazarlanamaz.
+
+**Kaynaklar:**
+- [SPK — Yatırım Danışmanlığı Yetki Belgesi Talebi](https://spk.gov.tr/kurumlar/portfoy-yonetim-sirketleri/basvuru-surecleri/yatirim-danismanligi-yetki-belgesi-talebi)
+- [SPK — Yatırım Hizmetleri ve Kuruluşları Rehberi (i-SPK.37.8)](https://spk.gov.tr/data/61e496a11b41c60d1404d6b2/Yat%C4%B1r%C4%B1m%20Hizmetleri%20ve%20Kurulu%C5%9Flar%C4%B1%20Rehberi%20(i-SPK.37.8)%2010%2003%202026.pdf)
+- [Anadolu Üniversitesi — Sermaye Piyasalarında Yatırım Danışmanlığı](https://avesis.anadolu.edu.tr/dosya?id=8d9f0fc5-fb60-4133-9b71-47e16acdc79e)
+- [Fintechtime — Fintek'lerin Yapay Zekâ ile Dönüşüm Çerçevesi](https://fintechtime.com/2025/11/finteklerin-yapay-zeka-ai-ile-donusum-cercevesi/)
+
+---
+
+## 2026-08-05 — Çarşamba
+**Yasal Zemin / Gün 2 — KVKK: Profil Verisi ve Firestore'un Nerede Durduğu**
+
+Dünkü karar (kişiselleştirme var, tavsiye yok) doğrudan bir veri sorusu doğuruyor:
+yatırımcı profili — risk yaklaşımı, vade, ilgi alanları — **kişisel veri**. Üstelik
+kişinin finansal davranışına dair. Bu verinin nerede durduğu ve nasıl toplandığı
+6698 sayılı KVKK kapsamında.
+
+---
+
+### Bulgu 1 — Firestore konumu bir "yurt dışına aktarım" kararıydı
+
+3 Ağustos'ta Firestore veritabanı oluşturulurken seçilen bölge, farkında olmadan bir
+KVKK kararıydı. Kurum'un yorumuna göre **yurt dışındaki bir bulutta depolama işlemi
+aktarım sayılıyor** — ayrıca yurt dışında bulunan bir hesaba erişim hakkı verilmesi de.
+
+Yani `users/{uid}/profile/default` belgesi hangi bölgedeyse, oraya aktarım yapılıyor.
+Türkiye'de Firestore bölgesi yok; dolayısıyla **hangi bölge seçilirse seçilsin aktarım
+gerçekleşiyor**. Soru "aktarım var mı" değil, "hangi güvenceyle" sorusuna dönüşüyor.
+
+---
+
+### Bulgu 2 — 2024 değişikliği sonrası mekanizma
+
+7499 sayılı Kanun'un 34. maddesiyle KVKK m.9 değişti, **01.06.2024**'te yürürlüğe girdi.
+Yönetmelik 10.07.2024 tarih ve 32598 sayılı Resmî Gazete'de yayımlandı. Standart
+sözleşme metinleri Kurul'un 04.06.2024 tarihli 2024/959 sayılı kararıyla kabul edildi.
+
+Aktarım için başvurulabilecek yollar:
+
+1. **Yeterlilik kararı** — Kurul'un ilgili ülke için verdiği karar
+2. **Uygun güvenceler** — standart sözleşme veya bağlayıcı şirket kuralları
+3. **İstisnalar** — açık rıza dahil, dar kapsamlı ve arızi kullanım için
+
+Bizim durumumuz için gerçekçi olan **standart sözleşme**. Standart sözleşme
+imzalandığında Kurul'a bildirim yükümlülüğü doğuyor (imza tarihinden itibaren süreli).
+
+**Not:** Kurul'un 2026 itibarıyla denetim odağını Bulut Bilişim / Yapay Zekâ / SaaS
+alanlarına kaydırdığı görülüyor. agentick.io bu üçünün kesişiminde duruyor — yani
+düşük öncelikli bir hedef değil.
+
+---
+
+### Bulgu 3 — Eksik olan üç şey
+
+Kod tarafı hazır ama hukuki katman boş:
+
+| Gereklilik | Durum |
+|---|---|
+| Aydınlatma metni (KVKK m.10) | ❌ Yok |
+| Açık rıza akışı (profil verisi için) | ❌ Yok — profil kaydı rızasız alınıyor |
+| Gizlilik politikası / KVKK metni | ❌ Yok |
+| Standart sözleşme (Google/Firebase) | ❌ İmzalanmadı, Kurul'a bildirilmedi |
+| VERBİS kaydı | ❓ Eşik değerlendirmesi yapılmadı |
+| Veri saklama/imha politikası | ❌ Yok |
+| Erişim kontrolü | ✅ `firestore.rules` — `users/{uid}` sadece sahibine |
+| Şifreleme (aktarım + durağan) | ✅ Firestore varsayılan |
+
+Teknik güvenlik tarafı iyi durumda; **belge ve süreç tarafı tamamen eksik.**
+
+---
+
+### Bulgu 4 — Sohbet geçmişi de veri
+
+3 Ağustos'ta `agentick_conversations_{uid}` düzeltmesi yapılmıştı — aynı bilgisayarda
+ikinci kullanıcının öncekinin sohbetlerini görmesi engellendi. KVKK açısından bu bir
+**veri ihlali riskiydi** ve düzeltilmesi isabetli. Ancak sohbetler hâlâ localStorage'da;
+kullanıcının silme talebi (KVKK m.11) geldiğinde sunucu tarafında silinecek bir kayıt
+yok — ki bu şu an lehimize, ama Firestore'a taşınırsa imha süreci tanımlanmalı.
+
+---
+
+### Bu günün kararı
+
+Ücretli sürüm öncesi **kesinlikle** tamamlanması gerekenler: aydınlatma metni, profil
+için açık rıza akışı, gizlilik politikası, Google ile standart sözleşme + Kurul bildirimi.
+
+Bu, yarınki ticari analizi doğrudan etkiliyor: bu dört kalem **lansman öncesi sabit
+maliyet** ve gecikme kalemi olarak modele girmeli.
+
+**Kaynaklar:**
+- [KVKK — Kişisel Verilerin Yurt Dışına Aktarılması Rehberi (Yayın No: 48)](https://www.kvkk.gov.tr/Icerik/8142/Kisisel-Verilerin-Yurt-Disina-Aktarilmasi-Rehberi)
+- [KVKK — Yurt Dışına Aktarım](https://www.kvkk.gov.tr/Icerik/2053/Yurtdisina-Aktarim)
+- [KVKK — Standart Sözleşme Metinleri Duyurusu](https://www.kvkk.gov.tr/Icerik/7998/Standart-Sozlesme-Metinlerinin-Ingilizce-Cevirisine-Iliskin-Duyuru)
+- [Paksoy — Yurt dışına veri aktarımlarına ilişkin yeni yönetmelik](https://paksoy.av.tr/2024/07/kisisel-verileri-koruma-kurumu-yurt-disina-veri-aktarimlarina-iliskin-yeni-bir-yonetmelik-yayimladi/)
+- [GSG Hukuk — Yönetmelik yürürlüğe girdi](https://www.gsghukuk.com/tr/bultenler-yayinlar/duyurular/kisisel-verilerin-yurt-disina-aktarilmasina-iliskin-usul-ve-esaslar-hakkinda-yonetmelik-yururluge-girdi.html)
+
+---
+
+## 2026-08-06 — Perşembe
+**Ticari Yol Haritası — İki Günlük Hukuki Kısıtın İçinde Model Kurmak**
+
+Salı ve çarşamba iki sınır çizdi:
+
+1. **Tavsiye satılamaz** → değer önerisi "karar verdirme" değil, "araştırma süresini kısaltma"
+2. **Profil verisi rıza + belge gerektiriyor** → kişiselleştirme lansmanın kritik yolunda
+
+Bugün bu iki kısıtın içinde ticari model çalışıldı.
+
+---
+
+### Rekabet konumu
+
+Türkiye'de mevcut oyuncular iki uçta toplanmış:
+
+| Segment | Örnek | Sunduğu | Boşluk |
+|---|---|---|---|
+| Aracı kurum / işlem | Midas | Komisyonsuz BIST işlemi, canlı veri | Analiz yüzeysel |
+| Profesyonel terminal | Matriks IQ, Foreks | Derin veri, gelişmiş grafik | Pahalı, öğrenme eğrisi dik, **doküman okumuyor** |
+
+**Boşluk:** İkisi de 500 sayfalık faaliyet raporunu okuyup "bu bilgi s.442'de" demiyor.
+agentick.io'nun kaynak gösterimi (31 Temmuz) tam olarak bu boşluğa oturuyor — ve
+tavsiye vermediği için Salı'daki kısıtı da ihlal etmiyor.
+
+**Konumlandırma cümlesi:** *"Terminal fiyatına değil, araştırma süresine odaklanan
+kaynaklı analiz."*
+
+---
+
+### Birim ekonomi — bilinenler ve bilinmeyenler
+
+Elimizde ölçülmüş veri var (3 Ağustos testlerinden):
+
+- Sentez modeli: Claude Haiku 4.5, soru başına 1500–2500 çıktı token'ı
+- Retriever: 12 kaynak × ~240 karakter snippet + tam chunk metni
+- Agent zinciri: planner → router → critic → synthesizer, retry olabiliyor
+
+**Henüz ölçülmedi:** soru başına gerçek $ maliyeti. Fiyatlama bunun üzerine kurulacağı
+için **ilk yapılacak iş bu** — LangSmith zaten bağlı, trace'lerden token maliyeti
+çıkarılabilir.
+
+Sabit maliyetler: Qdrant Cloud (ücretsiz tier şimdilik yetiyor), Firebase Spark plan
+(`$0/ay` — ekran görüntüsünde görünüyor, ölçekte Blaze'e geçiş gerekecek), hosting.
+
+**Hukuki sabit maliyet (çarşambadan):** avukat görüşü + aydınlatma/gizlilik metinleri +
+standart sözleşme süreci. Bu kalem lansman tarihini belirleyen kritik yolda.
+
+---
+
+### Fiyatlama iskeleti (taslak)
+
+| Katman | İçerik | Gerekçe |
+|---|---|---|
+| Ücretsiz | Günlük N soru, tek hisse, kaynak gösterimi | Ürünün farkı ilk 5 dakikada anlaşılmalı |
+| Bireysel | Sınırsız soru, karşılaştırma, portföy, **profil** | Profil = rıza akışı gerektiren katman |
+| Profesyonel | Toplu doküman yükleme, dışa aktarma, API | Sonraki faz |
+
+Kritik tasarım kararı: **profil özelliği ücretli katmanda** olmalı. Sebep ticari değil,
+hukuki — rıza akışı ve aydınlatma yükümlülüğü yalnızca o katmanda devreye girer, ücretsiz
+kullanıcıda kişisel veri işleme yüzeyi minimumda kalır.
+
+---
+
+### Riskler
+
+| Risk | Etki | Azaltma |
+|---|---|---|
+| SPK'nın kişiselleştirmeyi danışmanlık sayması | Yüksek | Profil = sunum filtresi; screening/öneri listesi yapılmayacak |
+| KVKK denetimi (SaaS/AI odağı) | Yüksek | Lansman öncesi belge seti + standart sözleşme |
+| LLM maliyetinin fiyatı aşması | Orta | Ölçüm önce, fiyat sonra; cache ve model kademelendirme |
+| Veri kaynağı (yfinance) ticari kullanım şartları | **Belirsiz** | Araştırılmadı — yarına |
+| KAP verisinin yeniden yayını | **Belirsiz** | Araştırılmadı — yarına |
+
+Son iki satır bugünkü çalışmanın açık ucu. Ticari kullanımda veri kaynağı lisansı,
+SPK ve KVKK kadar belirleyici olabilir.
+
+**Kaynaklar:**
+- [Midas — Ücretler & Komisyon Oranları](https://www.getmidas.com/ucretler/)
+- [Matriks Data — Finansal Veri & Analiz](https://www.matriksdata.com/website/)
+- [Osmanlı Menkul — Data ve Platform Kullanım Ücretleri](https://www.osmanlimenkul.com.tr/hisse-ve-viop/platformlarimiz/canli-data-ve-platformlar/data-ve-platform-kullanim-ucretleri)
+
+---
+
+## 2026-08-07 — Cuma — 📋 PLAN (henüz yapılmadı)
+
+> Bu bölüm **yapılacaklar listesidir**, tamamlanmış iş kaydı değildir. Gün sonunda
+> gerçekleşene göre yeniden yazılacak.
+
+Perşembe günü iki soru açık kaldı; cuma bunlarla başlıyor.
+
+### 1. Veri kaynağı lisansları (açık uç)
+
+- [ ] yfinance / Yahoo Finance kullanım şartları — ticari kullanım açıkça yasak mı?
+      Yasaksa lisanslı veri sağlayıcı alternatifleri ve maliyetleri
+- [ ] KAP verisinin yeniden yayınlanma koşulları
+- [ ] Haber RSS kaynaklarının içerik kullanım şartları (özet çıkarma / alıntılama)
+
+### 2. Ölçüm
+
+- [ ] LangSmith trace'lerinden **soru başına gerçek maliyet** çıkarılması
+      — fiyatlama bunun üzerine kurulacak, tahminle ilerlenmeyecek
+
+### 3. Hukuki belge seti — ilk taslaklar
+
+- [ ] Aydınlatma metni taslağı
+- [ ] Profil verisi için açık rıza akışı (UI + metin)
+- [ ] Gizlilik politikası taslağı
+- [ ] VERBİS kayıt eşiği değerlendirmesi
+
+### 4. Doğrulama
+
+- [ ] Sermaye piyasası hukuku alanında avukat görüşmesi için soru listesi hazırlanması
+      — özellikle: profil özelliği "kişiye özel tavsiye" sayılır mı?
+
+---
